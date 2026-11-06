@@ -61,7 +61,7 @@ struct SearchTests {
         }
         let library = try Library.open(at: dir, fileSystem: RealFileSystem())
         defer { try? library.close() }
-        #expect(try library.schemaVersion == 2)
+        #expect(try library.schemaVersion == LibraryDatabase.currentSchemaVersion)
         #expect(try library.search("\"pic\"").map(\.relativePath) == ["a/b/pic.jpg"])
         #expect(try library.search("\"a b\"").map(\.relativePath) == ["a/b/pic.jpg"])
     }

@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0013). Steps 0 to 2 done (skeleton and libraries; indexing of unmanaged roots; tags and search). Next: Step 3.
+**Status:** design complete (ADRs 0001–0013). Steps 0 to 3 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid). Next: Step 4.
 
 ## Modules
 
@@ -62,12 +62,19 @@ Notes from Step 2:
 - Million-file scale test after the FTS triggers: about 43 s first scan and 8 s rescan (debug build).
 
 ## Step 3: Thumbnails and grid (ADR 0011)
-- [ ] Thumbnail cache as files in the library folder, several sizes, keyed by file identity
-- [ ] Generate only for local files; keep after eviction
-- [ ] Placeholder icon with cloud badge for files without a thumbnail
-- [ ] Optional per-root "fetch once" setting (off by default) with batch approval
-- [ ] SwiftUI app shell: library picker, root list, search bar, AppKit-backed thumbnail grid
-- [ ] Open a file on user action (triggers download if needed, then generates the thumbnail)
+- [x] Thumbnail cache as files in the library folder, several sizes, keyed by file identity
+- [x] Generate only for local files; keep after eviction
+- [x] Placeholder icon with cloud badge for files without a thumbnail
+- [x] Optional per-root "fetch once" setting (off by default) with batch approval
+- [x] SwiftUI app shell: library picker, root list, search bar, AppKit-backed thumbnail grid
+- [x] Open a file on user action (triggers download if needed, then generates the thumbnail)
+
+Notes from Step 3:
+- Cache layout: `thumbnails/<128|256|512>/<fileID/1000>/<fileID>.jpg` in the library folder, keyed by `file.id` so moves and renames keep the thumbnail. A `thumbnail` table records the file size and modified time each set came from, so an edited file is regenerated. Migration v3 (schema version 3) also adds `root.fetchOnce`.
+- `ThumbnailService` never downloads: it checks live metadata before reading content. Downloads happen only in `prepareToOpen` and `fetchOnce`, through the new `FileSystem.download(at:)`. Fetch once needs the root setting, and a batch over 25 files or 250 MB needs approval (`approvedCount`). Miles does not evict the file again; macOS does that.
+- Only images get thumbnails (ImageIO). Video and PDF need a Quick Look renderer behind the `ThumbnailRenderer` protocol: a later addition.
+- The app is build- and launch-checked only. The SwiftUI shell and the AppKit grid have no automated tests; the logic they call is tested in `ThumbnailTests`.
+- CLI: `thumbs generate|path|fetch|clear` and `root fetch-once <id> on|off`.
 
 ## Step 4: Backup and restore (ADR 0005, 0012)
 - [ ] Snapshots via SQLite online backup or `VACUUM INTO`; integrity check

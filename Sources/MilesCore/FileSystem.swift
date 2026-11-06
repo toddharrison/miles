@@ -72,4 +72,11 @@ public protocol FileSystem: Sendable {
     func createFileExclusively(_ data: Data, at path: String) throws
     /// Removes a file Miles itself created (lock files). Never use for user files.
     func removeMilesOwnedFile(at path: String) throws
+    /// Downloads an iCloud placeholder and waits until it is local. Only ever called for a user's
+    /// explicit action (opening a file) or an approved per-root "fetch once" (ADR 0011).
+    func download(at path: String) throws
+}
+
+extension FileSystem {
+    public func download(at path: String) throws { throw FileSystemError.other("downloads are not supported by this filesystem") }
 }

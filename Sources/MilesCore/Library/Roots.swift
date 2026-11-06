@@ -7,6 +7,8 @@ public struct RootRecord: Equatable, Identifiable, Sendable {
     public var mode: String
     /// User exclusions (see `Exclusions`). App-owned library packages are always excluded on top of these.
     public var exclusions: [String] = []
+    /// Opt-in: download evicted images once to build thumbnails (ADR 0011). Off by default.
+    public var fetchOnce: Bool = false
 }
 
 extension Library {
@@ -40,9 +42,10 @@ extension Library {
 
     public func roots() throws -> [RootRecord] {
         try database.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions FROM root ORDER BY id").map {
+            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions, fetchOnce FROM root ORDER BY id").map {
                 RootRecord(id: $0["id"], location: VolumeLocation(volumeID: $0["volumeID"], relativePath: $0["relativePath"]),
-                           mode: $0["mode"], exclusions: Exclusions.decode($0["exclusions"]).userPatterns)
+                           mode: $0["mode"], exclusions: Exclusions.decode($0["exclusions"]).userPatterns,
+                           fetchOnce: $0["fetchOnce"])
             }
         }
     }

@@ -71,6 +71,17 @@ public final class RealFileSystem: FileSystem, @unchecked Sendable {
         return false
     }
 
+    public func download(at path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        do { try FileManager.default.startDownloadingUbiquitousItem(at: url) } catch { throw wrap(error, path) }
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            if let meta = try? metadata(at: path), !meta.isDataless { return }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        throw FileSystemError.other("timed out downloading \(path)")
+    }
+
     public func exists(_ path: String) -> Bool {
         var st = stat()
         return lstat(path, &st) == 0

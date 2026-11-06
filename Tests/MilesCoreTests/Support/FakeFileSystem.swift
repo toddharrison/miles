@@ -181,6 +181,18 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
         }
     }
 
+    /// Paths passed to `download`, so tests can assert nothing was fetched.
+    var downloads: [String] { lock.withLock { downloaded } }
+    private var downloaded: [String] = []
+
+    func download(at path: String) throws {
+        try lock.withLock {
+            guard nodes[path] != nil else { throw FileSystemError.notFound(path) }
+            downloaded.append(path)
+            nodes[path]?.meta.isDataless = false
+        }
+    }
+
     func removeMilesOwnedFile(at path: String) throws {
         try lock.withLock {
             guard nodes.removeValue(forKey: path) != nil else { throw FileSystemError.notFound(path) }

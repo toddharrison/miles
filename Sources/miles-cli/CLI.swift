@@ -14,10 +14,15 @@ enum CLI {
       root add <path>                         index a folder in place (unmanaged)
       root remove <id>                        stop indexing; forgets its records, touches no files
       root exclude <id> <pattern>...          replace the root's exclusions (a name, or a path/relative/to/root)
+      root fetch-once <id> on|off             per-root: download evicted images once to build thumbnails (off by default)
       root list
       scan [--root <id>]                      scan one or all roots
       list [--root <id>] [--missing] [--limit <n>]
       query [--limit <n>] [--count] <query>   search (tags, "text", filters; see below). Prints file id, root, size, kind, path
+      thumbs generate [--root <id>] [--limit <n>]   build thumbnails for local images; never downloads
+      thumbs path <file-id> [small|medium|large]    where a file's cached thumbnail is
+      thumbs fetch <root-id> [--approve <n>]        fetch-once downloads (needs the root setting; big batches need --approve)
+      thumbs clear                                  delete the thumbnail cache (rebuildable)
       tag add <file-id> <tag>...              tag a file as the user (ns:value, or flat)
       tag remove <file-id> <tag>...
       tag show <file-id>                      tags on a file, with source and status
@@ -68,7 +73,7 @@ enum CLI {
         case "library":
             try libraryCommand(&args, fs: fs, registry: registry)
 
-        case "root", "scan", "list", "query", "tag", "search":
+        case "root", "scan", "list", "query", "tag", "search", "thumbs":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
             switch command {
@@ -77,6 +82,7 @@ enum CLI {
             case "query": try queryCommand(&args, library: library)
             case "tag": try tagCommand(&args, library: library)
             case "search": try searchCommand(&args, library: library)
+            case "thumbs": try thumbsCommand(&args, library: library, fs: fs)
             default: try listCommand(&args, library: library)
             }
 
@@ -146,10 +152,15 @@ enum CLI {
             let id = try rootID(args.first)
             try library.setExclusions(Array(args.dropFirst()), forRoot: id)
             print("root \(id) exclusions: \(args.dropFirst().isEmpty ? "(none)" : args.dropFirst().joined(separator: ", "))")
+        case "fetch-once":
+            let id = try rootID(args.first)
+            guard args.count == 2, ["on", "off"].contains(args[1]) else { throw Failure(message: "usage: root fetch-once <id> on|off") }
+            try library.setFetchOnce(args[1] == "on", forRoot: id)
+            print("root \(id): fetch once \(args[1])")
         case "list":
             for root in try library.roots() {
                 let path = root.location.resolve(fileSystem: fs) ?? "(drive not mounted)"
-                let excluded = root.exclusions.isEmpty ? "" : "  excludes: \(root.exclusions.joined(separator: ", "))"
+                let excluded = (root.exclusions.isEmpty ? "" : "  excludes: \(root.exclusions.joined(separator: ", "))") + (root.fetchOnce ? "  fetch-once" : "")
                 print("\(root.id)\t\(root.mode)\t\(try library.fileCount(rootID: root.id)) files\t\(path)\(excluded)")
             }
         default:
@@ -290,6 +301,42 @@ enum CLI {
             print("deleted '\(name)'")
         default:
             throw Failure(message: usage)
+        }
+    }
+
+    // MARK: thumbs
+
+    static func thumbsCommand(_ args: inout [String], library: Library, fs: FileSystem) throws {
+        guard let sub = args.first else { throw Failure(message: "usage: thumbs generate|path|fetch|clear") }
+        args.removeFirst()
+        let service = ThumbnailService(library: library, fileSystem: fs)
+        switch sub {
+        case "generate":
+            let root = try take("--root", from: &args).map { try rootID($0) }
+            let limit = take("--limit", from: &args).flatMap(Int.init)
+            let b = try service.generateMissing(rootID: root, limit: limit)
+            print("generated \(b.generated), skipped \(b.skippedNotLocal) not on disk (nothing downloaded), \(b.unsupported) unsupported, \(b.failed) failed")
+        case "path":
+            guard let id = args.first.flatMap(Int64.init) else { throw Failure(message: "usage: thumbs path <file-id> [small|medium|large]") }
+            let name = args.dropFirst().first ?? "medium"
+            guard let size = ThumbnailSize.allCases.first(where: { "\($0)" == name }) else { throw Failure(message: "size is small, medium or large") }
+            let path = library.thumbnailPath(fileID: id, size: size)
+            guard FileManager.default.fileExists(atPath: path) else { throw Failure(message: "no thumbnail for file \(id) yet") }
+            print(path)
+        case "fetch":
+            let root = try rootID(args.first)
+            let approve = take("--approve", from: &args).flatMap(Int.init)
+            do {
+                let b = try service.fetchOnce(rootID: root, approvedCount: approve)
+                print("fetched and generated \(b.generated), \(b.failed) failed, \(b.unsupported) unsupported")
+            } catch let ThumbnailError.needsApproval(plan) {
+                throw Failure(message: "\(plan.fileCount) files (\(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))) would be downloaded. Re-run with --approve \(plan.fileCount) to go ahead")
+            }
+        case "clear":
+            try library.clearThumbnailCache()
+            print("thumbnail cache cleared")
+        default:
+            throw Failure(message: "usage: thumbs generate|path|fetch|clear")
         }
     }
 

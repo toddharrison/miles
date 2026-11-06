@@ -10,7 +10,7 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **library_meta**: key and value rows: `schema_version` (an older app refuses a higher value, ADR 0012), `library_id`, `created_at`. GRDB's own `grdb_migrations` table tracks applied migrations, and an unknown migration there is also refused.
 
 ### Locations
-- **root**: a directory Miles knows about. Holds volume ID plus path relative to the volume's mount point (always, not only for external volumes; the boot volume mounts at `/`) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions (a JSON array of lowercase patterns: a bare name matches any folder or file of that name, a path with `/` matches that path relative to the root; app-owned library packages are always excluded on top), and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
+- **root**: a directory Miles knows about. Holds volume ID plus path relative to the volume's mount point (always, not only for external volumes; the boot volume mounts at `/`) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions (a JSON array of lowercase patterns: a bare name matches any folder or file of that name, a path with `/` matches that path relative to the root; app-owned library packages are always excluded on top), an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)), and `fetchOnce` (off by default: download evicted images once to build thumbnails, [ADR 0011](decisions/0011-thumbnails.md)).
 - **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind (`image`, `video`, `audio`, `document`, `text`, `archive`, `other`, from the extension), iCloud status (`local` or `dataless`), partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
 
 ### Tags ([ADR 0008](decisions/0008-tag-model.md))
@@ -30,6 +30,9 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 ### Operations ([ADR 0004](decisions/0004-managed-root-operations.md))
 - **operation**: batch, kind (`move`, `rename`, `trash`, `resize`, `clone`), file, from and to path, holdback path, original hash, state, created time, undone time, released time.
 
+### Thumbnails ([ADR 0011](decisions/0011-thumbnails.md))
+- **thumbnail**: one row per file whose thumbnails exist on disk, with the file size and modified time they were made from, and the generated time. The images are files in `thumbnails/<pixels>/` in the library folder (128, 256 and 512), named by `file.id`. The rows and files are derived data, rebuildable and excluded from backups.
+
 ### Work
 - **job**: kind, file, state, attempts, provider and model, error.
 
@@ -48,6 +51,7 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **`operation` is the only way Miles changes files.** Every move, rename, trash, resize and clone writes an operation row before it runs, and undo reads from it.
 - **Hashes live on `file`.** Perceptual fingerprints are separate because they are versioned and optional.
 - **Query semantics** ([ADR 0009](decisions/0009-query-syntax.md)): missing files are hidden unless the query has a `missing:` filter. `source:` and `status:` terms ANDed together describe the same `file_tag` row. `size:` units are decimal (1 kb = 1000 bytes). A `date:` value of `2024`, `2024-05` or `2024-05-31` covers that whole period in the local time zone. `created:` and `dup:near` are not available yet (no creation date or fingerprints indexed).
+- **Thumbnails** are made only for local files, after a live metadata check, and never by downloading. A thumbnail outlives the file's eviction. It is regenerated when the file's size or modified time differs from the recorded ones. Placeholders show a kind icon with a cloud badge. A download happens only when the user opens a file, or in an approved fetch-once batch (over 25 files or 250 MB needs approval).
 - **Backups** copy this database and a JSON export of tags and rules ([ADR 0005](decisions/0005-backup-of-miles-data.md)).
 
 ## Deferred

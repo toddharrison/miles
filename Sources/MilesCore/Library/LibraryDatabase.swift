@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -142,6 +142,20 @@ enum LibraryDatabase {
                       WHERE rowid = \(row).fileID;
                     END
                     """)
+            }
+        }
+
+        // Thumbnail cache bookkeeping and the per-root fetch-once setting (ADR 0011).
+        migrator.registerMigration("v3-thumbnails") { db in
+            try db.alter(table: "root") { t in
+                t.add(column: "fetchOnce", .boolean).notNull().defaults(to: false)
+            }
+            // One row per file whose thumbnails (all sizes) exist on disk, with the file version they came from.
+            try db.create(table: "thumbnail") { t in
+                t.primaryKey("fileID", .integer).references("file", onDelete: .cascade)
+                t.column("sourceSize", .integer).notNull()
+                t.column("sourceModified", .datetime).notNull()
+                t.column("generatedAt", .datetime).notNull()
             }
         }
 
