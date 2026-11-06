@@ -26,14 +26,17 @@ public struct FileMetadata: Equatable, Sendable {
     public var fileID: UInt64
     /// True for an evicted iCloud placeholder: metadata only, content not on disk.
     public var isDataless: Bool
+    /// True for a symbolic link. Links are never followed or indexed.
+    public var isSymlink: Bool
 
-    public init(size: Int64, modified: Date, isDirectory: Bool, volumeID: String, fileID: UInt64, isDataless: Bool = false) {
+    public init(size: Int64, modified: Date, isDirectory: Bool, volumeID: String, fileID: UInt64, isDataless: Bool = false, isSymlink: Bool = false) {
         self.size = size
         self.modified = modified
         self.isDirectory = isDirectory
         self.volumeID = volumeID
         self.fileID = fileID
         self.isDataless = isDataless
+        self.isSymlink = isSymlink
     }
 }
 
@@ -62,6 +65,8 @@ public protocol FileSystem: Sendable {
     func contentsOfDirectory(at path: String) throws -> [String]
     func createDirectory(at path: String) throws
     func readFile(at path: String) throws -> Data
+    /// Reads up to `length` bytes from `offset`; shorter or empty at end of file. For hashing large files in chunks.
+    func readRange(at path: String, offset: Int64, length: Int) throws -> Data
     func writeFile(_ data: Data, to path: String) throws
     /// Creates the file only if it does not exist (O_EXCL); throws `alreadyExists` otherwise.
     func createFileExclusively(_ data: Data, at path: String) throws

@@ -2,8 +2,23 @@ import Foundation
 
 /// `FileSystem` backed by the real disk. Uses lstat and statfs only, so reading
 /// metadata never materializes an iCloud placeholder.
-public struct RealFileSystem: FileSystem {
+public final class RealFileSystem: FileSystem, @unchecked Sendable {
     public init() {}
+
+    /// Volume identity by device number. Resolving it costs a statfs plus a resource lookup, which
+    /// would dominate a large scan, so it is cached briefly. The short lifetime keeps a drive that is
+    /// swapped for another from being mistaken for the old one for long.
+    private let volumeCacheLock = NSLock()
+    private var volumeCache: [Int32: (id: String, expires: Date)] = [:]
+    private static let volumeCacheLifetime: TimeInterval = 2
+
+    private func volumeID(forDevice dev: Int32, path: String) -> String {
+        let now = Date()
+        if let hit = volumeCacheLock.withLock({ volumeCache[dev] }), hit.expires > now { return hit.id }
+        let id = volume(containing: path)?.id ?? "dev-\(dev)"
+        volumeCacheLock.withLock { volumeCache[dev] = (id, now.addingTimeInterval(Self.volumeCacheLifetime)) }
+        return id
+    }
 
     /// `SF_DATALESS` from <sys/stat.h>: set on evicted iCloud (and other File Provider) files.
     private static let sfDataless: UInt32 = 0x4000_0000
@@ -64,15 +79,16 @@ public struct RealFileSystem: FileSystem {
     public func metadata(at path: String) throws -> FileMetadata {
         var st = stat()
         guard lstat(path, &st) == 0 else { throw map(errno, path) }
-        let volumeID = volume(containing: path)?.id ?? "dev-\(st.st_dev)"
+        let volumeIdentity = volumeID(forDevice: st.st_dev, path: path)
         let modified = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1e9)
         return FileMetadata(
             size: Int64(st.st_size),
             modified: modified,
             isDirectory: (st.st_mode & S_IFMT) == S_IFDIR,
-            volumeID: volumeID,
+            volumeID: volumeIdentity,
             fileID: UInt64(st.st_ino),
-            isDataless: (st.st_flags & Self.sfDataless) != 0
+            isDataless: (st.st_flags & Self.sfDataless) != 0,
+            isSymlink: (st.st_mode & S_IFMT) == S_IFLNK
         )
     }
 
@@ -89,6 +105,16 @@ public struct RealFileSystem: FileSystem {
     public func readFile(at path: String) throws -> Data {
         do { return try Data(contentsOf: URL(fileURLWithPath: path)) }
         catch { throw wrap(error, path) }
+    }
+
+    public func readRange(at path: String, offset: Int64, length: Int) throws -> Data {
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { throw map(errno, path) }
+        defer { close(fd) }
+        var buffer = [UInt8](repeating: 0, count: length)
+        let n = pread(fd, &buffer, length, off_t(offset))
+        guard n >= 0 else { throw map(errno, path) }
+        return Data(buffer.prefix(n))
     }
 
     public func writeFile(_ data: Data, to path: String) throws {

@@ -48,4 +48,4 @@ Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/). The concep
 
 ## Status
 
-Design is complete (ADRs 0001–0013). Step 0 of [docs/PLAN.md](docs/PLAN.md) is done: Xcode project and Swift package skeleton, library create and open with a lock and schema gating, a library registry, and root overlap checks. The next step is Step 1 (indexing). There are no open design questions.
+Design is complete (ADRs 0001–0013). Step 0 of [docs/PLAN.md](docs/PLAN.md) is done: Xcode project and Swift package skeleton, library create and open with a lock and schema gating, a library registry, and root overlap checks. Step 1 is done too: `miles-cli` can add roots, scan them and list files, with moved files re-matched, missing files marked, iCloud placeholders indexed by metadata only, and file-change events plus periodic reconciliation. The next step is Step 2 (tags and search). There are no open design questions.

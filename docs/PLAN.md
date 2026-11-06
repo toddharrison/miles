@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0013). Step 0 done (skeleton, library create/open, lock, registry, roots overlap check). Next: Step 1.
+**Status:** design complete (ADRs 0001–0013). Steps 0 and 1 done (skeleton and libraries; indexing of unmanaged roots). Next: Step 2.
 
 ## Modules
 
@@ -34,15 +34,15 @@ Index a folder, browse it as a thumbnail grid, search by tag. Nothing in it can 
 - [x] Update README status and tick these boxes
 
 ## Step 1: Indexing of unmanaged roots (ADR 0001, 0004)
-- [ ] Add and remove roots (default mode unmanaged). `Library.addRoot` exists from Step 0 with the overlap checks; removal, exclusions and the CLI remain
-- [ ] Scanner: walk a root, write `file` rows (size, modified time, kind, volume and file ID)
-- [ ] Exclusions: `.photoslibrary` and other app-owned library packages never indexed
-- [ ] Re-match moved or renamed files by volume and file ID, then by hash
-- [ ] Missing files: mark missing-since, remove after the grace period
-- [ ] iCloud status: detect dataless files, index metadata only, never trigger a download
-- [ ] File-change events plus periodic reconciliation
-- [ ] `miles-cli scan` and `miles-cli list`
-- [ ] Million-file synthetic scale test
+- [x] Add and remove roots (default mode unmanaged), with per-root exclusions. A root may not be or sit inside an app-owned library
+- [x] Scanner: walk a root, write `file` rows (size, modified time, kind, volume and file ID)
+- [x] Exclusions: `.photoslibrary` and other app-owned library packages never indexed
+- [x] Re-match moved or renamed files by volume and file ID, then by hash
+- [x] Missing files: mark missing-since, remove after the grace period
+- [x] iCloud status: detect dataless files, index metadata only, never trigger a download
+- [x] File-change events plus periodic reconciliation
+- [x] `miles-cli scan` and `miles-cli list`
+- [x] Million-file synthetic scale test (`MILES_SCALE_TESTS=1 swift test --filter ScaleTests/millionFiles`; about 37 s first scan and 10 s rescan in a debug build. A 50,000-file variant runs in every `swift test`)
 
 ## Step 2: Tags and search (ADR 0008, 0009)
 - [ ] Migrations: `namespace`, `tag`, `tag_alias`, `tag_implication`, `file_tag`

@@ -55,15 +55,42 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
 
     func markSynced(_ path: String) { lock.withLock { syncedRoots.append(path) } }
 
-    func addFile(_ path: String, size: Int64 = 0, dataless: Bool = false, modified: Date = Date(timeIntervalSince1970: 0)) {
+    /// Adds a file. `content` sets real bytes (and the size) for hashing; otherwise it is empty
+    /// with the stated `size`. Re-adding a path keeps its file ID, as an in-place edit does.
+    func addFile(_ path: String, size: Int64 = 0, content: Data? = nil, dataless: Bool = false,
+                 modified: Date = Date(timeIntervalSince1970: 0)) {
         lock.withLock {
             ensureParents(of: path)
             let volume = volumeLocked(containing: path)?.id ?? "BOOT"
-            var meta = FileMetadata(size: size, modified: modified, isDirectory: false, volumeID: volume, fileID: takeID(), isDataless: dataless)
-            meta.isDataless = dataless
-            nodes[path] = Node(data: Data(), meta: meta)
+            let id = nodes[path]?.meta.fileID ?? takeID()
+            let meta = FileMetadata(size: content.map { Int64($0.count) } ?? size, modified: modified, isDirectory: false,
+                                    volumeID: volume, fileID: id, isDataless: dataless)
+            nodes[path] = Node(data: content ?? Data(), meta: meta)
         }
     }
+
+    func addSymlink(_ path: String) {
+        lock.withLock {
+            ensureParents(of: path)
+            let volume = volumeLocked(containing: path)?.id ?? "BOOT"
+            nodes[path] = Node(data: Data(), meta: FileMetadata(size: 0, modified: Date(timeIntervalSince1970: 0), isDirectory: false,
+                                                                volumeID: volume, fileID: takeID(), isSymlink: true))
+        }
+    }
+
+    /// Turns a directory into an evicted placeholder.
+    func setDataless(_ path: String) {
+        lock.withLock { nodes[path]?.meta.isDataless = true }
+    }
+
+    /// Simulates a removal by the user outside Miles (tests only).
+    func removeItem(_ path: String) {
+        lock.withLock { for key in nodes.keys where key == path || key.hasPrefix(path + "/") { nodes.removeValue(forKey: key) } }
+    }
+
+    /// Paths whose directory listing was read, to assert nothing was enumerated that should not be.
+    var listedDirectories: [String] { lock.withLock { listed } }
+    private var listed: [String] = []
 
     /// Moves or renames, keeping the file ID, as a same-volume `rename(2)` does.
     func move(_ from: String, to: String) {
@@ -100,6 +127,7 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
         try lock.withLock {
             guard let node = nodes[path] else { throw FileSystemError.notFound(path) }
             guard node.data == nil else { throw FileSystemError.notADirectory(path) }
+            listed.append(path)
             let prefix = path == "/" ? "/" : path + "/"
             return nodes.keys.compactMap { key -> String? in
                 guard key != path, key.hasPrefix(prefix) else { return nil }
@@ -125,6 +153,12 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
             guard let node = nodes[path], let data = node.data else { throw FileSystemError.notFound(path) }
             return data
         }
+    }
+
+    func readRange(at path: String, offset: Int64, length: Int) throws -> Data {
+        let data = try readFile(at: path)
+        guard offset < data.count else { return Data() }
+        return data.subdata(in: Int(offset)..<min(data.count, Int(offset) + length))
     }
 
     func writeFile(_ data: Data, to path: String) throws {

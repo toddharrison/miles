@@ -11,6 +11,7 @@ public final class Library: @unchecked Sendable {
     public let volume: VolumeLocation
     public let database: DatabasePool
     private let lock: LibraryLock
+    let scanClock = ScanClock()
 
     private init(id: UUID, directory: String, volume: VolumeLocation, database: DatabasePool, lock: LibraryLock) {
         self.id = id

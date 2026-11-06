@@ -23,9 +23,10 @@ Layout: root `Package.swift` (modules `MilesCore`, `MilesAI`, executable `miles-
 
 - Build the package: `swift build`
 - Test the package (Swift Testing): `swift test`; one suite: `swift test --filter LibraryTests`
-- CLI: `swift run miles-cli <command>` (currently `version`)
+- CLI: `swift run miles-cli <command>`: `version`, `library create|list|forget`, `root add|remove|exclude|list`, `scan`, `list` (see `miles-cli help`). `library create` registers the library in the app's preferences (`app.miles.Miles`), so use `library forget` after trying it
+- Million-file scale test: `MILES_SCALE_TESTS=1 swift test --filter ScaleTests/millionFiles`
 - Build the app: `xcodebuild -project Miles.xcodeproj -scheme MilesApp -configuration Debug CODE_SIGNING_ALLOWED=NO build`
-- Tests use `FakeFileSystem` (`Tests/MilesCoreTests/Support`) for volumes, iCloud placeholders and moves, and real temp directories (`TempDir`) where SQLite needs a real file. Hold the `LibraryLock` or `Library` you acquire: dropping it releases the lock.
+- Tests use `FakeFileSystem` (`Tests/MilesCoreTests/Support`; `SyntheticFileSystem` for scale) for volumes, iCloud placeholders and moves, and real temp directories (`TempDir`) where SQLite needs a real file. Hold the `LibraryLock` or `Library` you acquire: dropping it releases the lock.
 
 ## Workflow notes
 - The user usually asks to "commit and continue". Commit docs and code together with a clear message, not part-way through an unverified step.

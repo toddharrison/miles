@@ -10,8 +10,8 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **library_meta**: key and value rows: `schema_version` (an older app refuses a higher value, ADR 0012), `library_id`, `created_at`. GRDB's own `grdb_migrations` table tracks applied migrations, and an unknown migration there is also refused.
 
 ### Locations
-- **root**: a directory Miles knows about. Holds volume ID plus path relative to the volume's mount point (always, not only for external volumes; the boot volume mounts at `/`) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions, and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
-- **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind, iCloud status, partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
+- **root**: a directory Miles knows about. Holds volume ID plus path relative to the volume's mount point (always, not only for external volumes; the boot volume mounts at `/`) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions (a JSON array of lowercase patterns: a bare name matches any folder or file of that name, a path with `/` matches that path relative to the root; app-owned library packages are always excluded on top), and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
+- **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind (`image`, `video`, `audio`, `document`, `text`, `archive`, `other`, from the extension), iCloud status (`local` or `dataless`), partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
 
 ### Tags ([ADR 0008](decisions/0008-tag-model.md))
 - **namespace**: tag namespaces, with one default namespace for flat tags.
@@ -42,7 +42,8 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **Tags are per file.** Exact duplicates do not share tags automatically. Duplicate resolution offers to merge tags so no copy's tags are lost silently.
 - **User tags win.** AI and rule tags never overwrite or remove a `user` tag.
 - **Rejected suggestions are kept.** A `rejected` AI tag is not suggested again for that file. Provider and model are stored so suggestions can be re-run when models change.
-- **Missing files are marked, not deleted.** A file that disappears gets a missing-since date and is removed only after a grace period, since it may be on an unmounted drive or an evicted iCloud file.
+- **Missing files are marked, not deleted.** A file that disappears gets a missing-since date and is removed only after a grace period (30 days by default), since it may be on an unmounted drive or an evicted iCloud file. A root whose drive is unmounted or whose folder is gone is reported unavailable and nothing in it is marked. Files under a directory the scanner could not read (or that is an iCloud placeholder) are left as they were.
+- **Scanning reads metadata only.** Symbolic links, `.DS_Store` and AppleDouble files are not indexed, and other volumes mounted inside a root are not entered. A file whose size, modified time or file ID changed has its hashes cleared. A file seen at its old path again is no longer missing. A new path is matched to an unseen row whose old path is gone by volume and file ID, then by full hash (only when exactly one such row has that hash); the row keeps its identity, so tags survive.
 - **`operation` is the only way Miles changes files.** Every move, rename, trash, resize and clone writes an operation row before it runs, and undo reads from it.
 - **Hashes live on `file`.** Perceptual fingerprints are separate because they are versioned and optional.
 - **Backups** copy this database and a JSON export of tags and rules ([ADR 0005](decisions/0005-backup-of-miles-data.md)).
