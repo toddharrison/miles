@@ -130,12 +130,13 @@ public struct IndexedFile: Equatable, Identifiable, Sendable {
 
 extension Library {
     /// Indexed files, ordered by root then path. Missing files are left out unless asked for.
-    public func files(rootID: Int64? = nil, includeMissing: Bool = false, limit: Int? = nil) throws -> [IndexedFile] {
+    public func files(rootID: Int64? = nil, includeMissing: Bool = false, folders: FolderFilter = FolderFilter(), limit: Int? = nil) throws -> [IndexedFile] {
         try database.read { db in
             var sql = "SELECT id, rootID, relativePath, size, modified, kind, icloudStatus, missingSince FROM file WHERE 1=1"
             var args: [DatabaseValueConvertible] = []
             if let rootID { sql += " AND rootID = ?"; args.append(rootID) }
             if !includeMissing { sql += " AND missingSince IS NULL" }
+            if let clause = folders.sqlClause() { sql += " AND " + clause.sql; args += clause.arguments }
             sql += " ORDER BY rootID, relativePath"
             if let limit { sql += " LIMIT ?"; args.append(limit) }
             return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).map {

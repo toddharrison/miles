@@ -9,14 +9,15 @@ public struct SavedSearch: Equatable, Sendable {
 
 extension Library {
     /// Files matching a query in the syntax of ADR 0009. A malformed query throws `QueryError`.
-    public func search(_ query: String, limit: Int? = nil, offset: Int = 0) throws -> [IndexedFile] {
+    public func search(_ query: String, folders: FolderFilter = FolderFilter(), limit: Int? = nil, offset: Int = 0) throws -> [IndexedFile] {
         let compiled = try QueryCompiler.compile(try QueryParser.parse(query))
+        let folder = folders.sqlClause()
         return try database.read { db in
             var sql = """
                 SELECT file.id, file.rootID, file.relativePath, file.size, file.modified, file.kind, file.icloudStatus, file.missingSince
-                FROM file WHERE \(compiled.whereSQL) ORDER BY \(compiled.orderSQL)
+                FROM file WHERE (\(compiled.whereSQL))\(folder.map { " AND " + $0.sql } ?? "") ORDER BY \(compiled.orderSQL)
                 """
-            var args = compiled.arguments
+            var args = compiled.arguments + (folder?.arguments ?? [])
             if let limit { sql += " LIMIT ? OFFSET ?"; args.append(limit.databaseValue); args.append(offset.databaseValue) }
             return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).map {
                 IndexedFile(id: $0["id"], rootID: $0["rootID"], relativePath: $0["relativePath"], size: $0["size"],
@@ -26,11 +27,12 @@ extension Library {
         }
     }
 
-    public func searchCount(_ query: String) throws -> Int {
+    public func searchCount(_ query: String, folders: FolderFilter = FolderFilter()) throws -> Int {
         let compiled = try QueryCompiler.compile(try QueryParser.parse(query))
+        let folder = folders.sqlClause()
         return try database.read { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM file WHERE \(compiled.whereSQL)",
-                             arguments: StatementArguments(compiled.arguments)) ?? 0
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM file WHERE (\(compiled.whereSQL))\(folder.map { " AND " + $0.sql } ?? "")",
+                             arguments: StatementArguments(compiled.arguments + (folder?.arguments ?? []))) ?? 0
         }
     }
 

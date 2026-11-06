@@ -27,7 +27,7 @@ enum CLI {
       list [--root <id>] [--missing] [--limit <n>]
       query [--limit <n>] [--count] <query>   search (tags, "text", filters; see below). Prints file id, root, size, kind, path
       thumbs generate [--root <id>] [--limit <n>]   build thumbnails for local images; never downloads
-      thumbs path <file-id> [small|medium]    where a file's cached thumbnail is
+      thumbs path <file-id>                  where a file's cached thumbnail is
       thumbs fetch <root-id> [--approve <n>]        fetch-once downloads (needs the root setting; big batches need --approve)
       thumbs clear                                  delete the thumbnail cache (rebuildable)
       tag add <file-id> <tag>...              tag a file as the user (ns:value, or flat)
@@ -615,10 +615,8 @@ enum CLI {
             let b = try service.generateMissing(rootID: root, limit: limit)
             print("generated \(b.generated), skipped \(b.skippedNotLocal) not on disk (nothing downloaded), \(b.unsupported) unsupported, \(b.failed) failed")
         case "path":
-            guard let id = args.first.flatMap(Int64.init) else { throw Failure(message: "usage: thumbs path <file-id> [small|medium]") }
-            let name = args.dropFirst().first ?? "medium"
-            guard let size = ThumbnailSize.allCases.first(where: { "\($0)" == name }) else { throw Failure(message: "size is small or medium") }
-            let path = library.thumbnailPath(fileID: id, size: size)
+            guard let id = args.first.flatMap(Int64.init) else { throw Failure(message: "usage: thumbs path <file-id>") }
+            let path = library.thumbnailPath(fileID: id, size: .medium)
             guard FileManager.default.fileExists(atPath: path) else { throw Failure(message: "no thumbnail for file \(id) yet") }
             print(path)
         case "fetch":

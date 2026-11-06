@@ -61,23 +61,7 @@ struct ContentView: View {
                 Label("All files", systemImage: "photo.on.rectangle")
                     .tag(SidebarItem.all)
                 ForEach(model.roots) { root in
-                    Label(root.location.resolve(fileSystem: model.fileSystem).map { ($0 as NSString).lastPathComponent } ?? "Drive not mounted",
-                          systemImage: "folder")
-                        .tag(SidebarItem.root(root.id))
-                        .contextMenu {
-                            Toggle("Fetch iCloud files once for thumbnails", isOn: Binding(
-                                get: { root.fetchOnce }, set: { model.setFetchOnce($0, root: root.id) }))
-                            Toggle("Use the on-device language model on images and text (off by default)", isOn: Binding(
-                                get: { !root.layer4Kinds.isEmpty }, set: { model.setLayer4($0, root: root.id) }))
-                            Menu("Accept AI suggestions automatically") {
-                                Button("Never (review every suggestion)") { model.setAutoAccept(nil, root: root.id) }
-                                ForEach([0.95, 0.9, 0.8], id: \.self) { value in
-                                    Button("At or above \(Int(value * 100))%") { model.setAutoAccept(value, root: root.id) }
-                                }
-                            }
-                            Divider()
-                            Button("Stop Indexing This Folder", role: .destructive) { model.removeRoot(root.id) }
-                        }
+                    rootRow(root)
                 }
             }
             if !model.savedSearches.isEmpty {
@@ -98,6 +82,43 @@ struct ContentView: View {
                     .help("Index a folder in place. Miles never moves or changes its files")
             }
         }
+    }
+
+    private func rootName(_ root: RootRecord) -> String {
+        root.location.resolve(fileSystem: model.fileSystem).map { ($0 as NSString).lastPathComponent } ?? "Drive not mounted"
+    }
+
+    /// A root with its folder tree under it. Selecting the root shows just that root; each folder's checkbox
+    /// shows or hides it in the grid and in search (view only, ADR 0017).
+    @ViewBuilder private func rootRow(_ root: RootRecord) -> some View {
+        let node = model.folderTree.first { $0.ref.rootID == root.id }
+        let label = HStack(spacing: 6) {
+            if let node { FolderCheckbox(model: model, node: node) }
+            Label(rootName(root), systemImage: "folder")
+        }
+        .contextMenu { rootMenu(root) }
+        if let node, !node.children.isEmpty {
+            DisclosureGroup {
+                ForEach(node.children) { FolderTreeRow(model: model, node: $0) }
+            } label: { label.tag(SidebarItem.root(root.id)) }
+        } else {
+            label.tag(SidebarItem.root(root.id))
+        }
+    }
+
+    @ViewBuilder private func rootMenu(_ root: RootRecord) -> some View {
+        Toggle("Fetch iCloud files once for thumbnails", isOn: Binding(
+            get: { root.fetchOnce }, set: { model.setFetchOnce($0, root: root.id) }))
+        Toggle("Use the on-device language model on images and text (off by default)", isOn: Binding(
+            get: { !root.layer4Kinds.isEmpty }, set: { model.setLayer4($0, root: root.id) }))
+        Menu("Accept AI suggestions automatically") {
+            Button("Never (review every suggestion)") { model.setAutoAccept(nil, root: root.id) }
+            ForEach([0.95, 0.9, 0.8], id: \.self) { value in
+                Button("At or above \(Int(value * 100))%") { model.setAutoAccept(value, root: root.id) }
+            }
+        }
+        Divider()
+        Button("Stop Indexing This Folder", role: .destructive) { model.removeRoot(root.id) }
     }
 
     private enum SidebarItem: Hashable { case all, root(Int64), saved(Int64) }
@@ -186,6 +207,9 @@ struct ContentView: View {
             }
             .searchable(text: $model.query, prompt: "Search: cat or dog, \"text\", type:image, size:>5mb")
             .searchSuggestions {
+                ForEach(QueryCompletion.suggestions(for: model.query, tags: model.allTags), id: \.self) { completion in
+                    Text(completion).searchCompletion(completion)
+                }
                 ForEach(model.searchHistory.filter { model.query.isEmpty || ($0.localizedCaseInsensitiveContains(model.query) && $0 != model.query) }, id: \.self) { past in
                     Label(past, systemImage: "clock").searchCompletion(past)
                 }
@@ -254,6 +278,12 @@ struct ContentView: View {
                 }
             }
             Text(model.status ?? summary).foregroundStyle(.secondary).font(.callout)
+            if model.folderFilter.isActive {
+                let folders = model.folderSummary
+                Button("\(folders.shown) of \(folders.total) folders · Show All") { model.showAllFolders() }
+                    .buttonStyle(.link).font(.callout)
+                    .help("Some folders are unchecked in the sidebar and hidden from the grid and search. Click to show them all")
+            }
             Spacer()
             if model.selectedFileIDs.count > 1 {
                 Text("\(model.selectedFileIDs.count.formatted()) selected").foregroundStyle(.secondary).font(.callout)
@@ -272,7 +302,12 @@ struct ContentView: View {
             }
             Text((model.queuePaused ? "Paused: " : "Working: ") + (parts.isEmpty ? "nothing waiting" : parts.joined(separator: ", ")))
                 .foregroundStyle(.secondary).font(.callout)
-            if !model.queuePaused && total > 0 { ProgressView().controlSize(.small) }
+            if !model.queuePaused, let fraction = model.queueProgress {
+                ProgressView(value: fraction).frame(width: 100)
+                    .help("\(Int(fraction * 100))% of the current batch of background work")
+            } else if !model.queuePaused && total > 0 {
+                ProgressView().controlSize(.small)
+            }
             Button(model.queuePaused ? "Resume" : "Pause", systemImage: model.queuePaused ? "play.fill" : "pause.fill") {
                 if model.queuePaused { model.resumeQueue() } else { model.pauseQueue() }
             }
@@ -284,5 +319,46 @@ struct ContentView: View {
     private var summary: String {
         let shown = model.files.count
         return shown == model.totalFiles ? "\(shown) files" : "\(shown) of \(model.totalFiles) files"
+    }
+}
+
+/// A folder checkbox: all, none or mixed (some folders below are unchecked).
+private struct FolderCheckbox: View {
+    let model: AppModel
+    let node: FolderNode
+
+    var body: some View {
+        let state = model.folderFilter.state(of: node)
+        Button {
+            model.toggleFolder(node)
+        } label: {
+            Image(systemName: state == .on ? "checkmark.square.fill" : state == .mixed ? "minus.square.fill" : "square")
+                .foregroundStyle(state == .off ? Color.secondary : Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .help(state == .on ? "Hide this folder and the ones below it from the grid and search" : "Show this folder and the ones below it")
+    }
+}
+
+/// A folder below a root: checkbox, name and file count, with its own subfolders under a disclosure triangle.
+private struct FolderTreeRow: View {
+    let model: AppModel
+    let node: FolderNode
+
+    var body: some View {
+        if node.children.isEmpty {
+            row
+        } else {
+            DisclosureGroup { ForEach(node.children) { FolderTreeRow(model: model, node: $0) } } label: { row }
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 6) {
+            FolderCheckbox(model: model, node: node)
+            Label(node.name, systemImage: "folder")
+            Spacer(minLength: 4)
+            if node.fileCount > 0 { Text(node.fileCount.formatted()).font(.caption).foregroundStyle(.tertiary) }
+        }
     }
 }

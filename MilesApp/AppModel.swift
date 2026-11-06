@@ -45,9 +45,19 @@ final class AppModel {
     /// The library the user wants open; retried when a drive mounts.
     private var wantedLibraryID: UUID?
 
+    /// The folders under every root, for the sidebar tree. Rebuilt from the index (never from the disk) whenever roots change or a scan ends.
+    private(set) var folderTree: [FolderNode] = []
+    /// Which folders the grid and search show (ADR 0017). Remembered per library, so the view is as it was left.
+    private(set) var folderFilter = FolderFilter()
+    var folderSummary: FolderFilter.Summary { folderFilter.summary(of: folderTree) }
+
     var selectedRootID: Int64? { didSet { if oldValue != selectedRootID { refresh() } } }
     var query = "" {
-        didSet { if let saved = activeSaved, saved.query != query { activeSaved = nil } }
+        didSet {
+            if let saved = activeSaved, saved.query != query { activeSaved = nil }
+            // Clearing the box (its x button, or deleting the text) shows everything again without a submit.
+            if query.isEmpty, !oldValue.isEmpty { refresh() }
+        }
     }
     /// The saved search whose query is in the search box, so the sidebar can highlight it. Editing the text clears it.
     private(set) var activeSaved: SavedSearch?
@@ -69,6 +79,14 @@ final class AppModel {
 
     // Background work
     private(set) var waitingJobs: [JobGroup: Int] = [:]
+    /// The most jobs waiting at once since the queue was last empty. Finished jobs are deleted, so this is the
+    /// denominator for the queue's progress bar.
+    private var queuePeak = 0
+    /// How much of the current batch of background work is done, or nil when nothing is waiting.
+    var queueProgress: Double? {
+        let waiting = waitingJobs.values.reduce(0, +)
+        return waiting > 0 && queuePeak > 0 ? 1 - Double(waiting) / Double(queuePeak) : nil
+    }
     private(set) var queuePaused = false
     private var thumbnailGenerator: ThumbnailGenerator?
     private var statusPoll: Task<Void, Never>?
@@ -77,6 +95,7 @@ final class AppModel {
     nonisolated private static let resultLimit = 50_000
 
     init() {
+        pruneDeletedLibraries()
         libraries = registry.libraries
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.closeLibrary() }
@@ -90,6 +109,14 @@ final class AppModel {
             MainActor.assumeIsolated { self?.driveWillUnmount(devicePath: device) }
         }
         if let id = registry.defaultLibraryID { openLibrary(id) }
+    }
+
+    /// Drops libraries whose folder was deleted or moved by hand: the drive is mounted but no library is there. Only the
+    /// registry entry goes. A library on a drive that is not connected stays, since it may come back.
+    private func pruneDeletedLibraries() {
+        for record in registry.libraries {
+            if case .notALibrary = registry.availability(of: record, fileSystem: fileSystem) { registry.unregister(record.id) }
+        }
     }
 
     /// A drive appeared: reopen the wanted library if that is what was missing, and rescan roots that came back.
@@ -271,6 +298,8 @@ final class AppModel {
         try? library?.close()
         library = nil
         roots = []
+        folderTree = []
+        folderFilter = FolderFilter()
         files = []
         totalFiles = 0
         suggestions = []
@@ -283,6 +312,7 @@ final class AppModel {
         activeSaved = nil
         queryError = nil
         waitingJobs = [:]
+        queuePeak = 0
         queuePaused = false
     }
 
@@ -350,6 +380,32 @@ final class AppModel {
     private func reloadRoots() {
         roots = (try? library?.roots()) ?? []
         libraries = registry.libraries
+        folderFilter = (try? library?.folderFilter()) ?? FolderFilter()
+        reloadFolderTree()
+    }
+
+    private func reloadFolderTree() {
+        guard let library else { return }
+        Task {
+            let tree = await Task.detached { (try? library.folderTree()) ?? [] }.value
+            if self.library === library { folderTree = tree }
+        }
+    }
+
+    /// A click on a folder's checkbox. The choice is saved with the library and the grid is refreshed.
+    func toggleFolder(_ node: FolderNode) {
+        var updated = folderFilter
+        updated.toggle(node)
+        applyFolderFilter(updated)
+    }
+
+    func showAllFolders() { applyFolderFilter(FolderFilter()) }
+
+    private func applyFolderFilter(_ filter: FolderFilter) {
+        guard let library, filter != folderFilter else { return }
+        folderFilter = filter
+        do { try library.setFolderFilter(filter) } catch { errorMessage = error.localizedDescription }
+        refresh()
     }
 
     // MARK: Scan and thumbnails
@@ -514,12 +570,13 @@ final class AppModel {
         guard let library else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let rootID = selectedRootID
+        let folders = folderFilter
         Task {
             let result = await Task.detached { () -> Result<([IndexedFile], Int), Error> in
                 Result {
                     let found = text.isEmpty
-                        ? try library.files(rootID: rootID, limit: Self.resultLimit)
-                        : try library.search(text, limit: Self.resultLimit).filter { rootID == nil || $0.rootID == rootID }
+                        ? try library.files(rootID: rootID, folders: folders, limit: Self.resultLimit)
+                        : try library.search(text, folders: folders, limit: Self.resultLimit).filter { rootID == nil || $0.rootID == rootID }
                     return (found, try library.fileCount())
                 }
             }.value
@@ -677,6 +734,8 @@ final class AppModel {
         var grouped: [JobGroup: Int] = [:]
         for (kind, n) in counts { grouped[JobGroup(kind), default: 0] += n }
         if grouped != waitingJobs { waitingJobs = grouped }
+        let waiting = grouped.values.reduce(0, +)
+        queuePeak = waiting == 0 ? 0 : max(queuePeak, waiting)
     }
 
     /// Stops the background queue between jobs. Queued work stays in the database; Resume picks it up.

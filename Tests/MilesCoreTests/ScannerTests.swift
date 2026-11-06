@@ -48,7 +48,7 @@ struct ScannerTests {
         for size in ["128", "256", "512"] { try FileManager.default.createDirectory(atPath: base + "/" + size, withIntermediateDirectories: true) }
         env.library.removeObsoleteThumbnailSizes()
         let left = try FileManager.default.contentsOfDirectory(atPath: base).sorted()
-        #expect(left == ["128", "256"])
+        #expect(left == ["256"])
     }
 
     @Test func indexesFilesWithMetadata() throws {

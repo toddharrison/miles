@@ -16,7 +16,7 @@ extension Library {
         if FileManager.default.fileExists(atPath: dir) { try FileManager.default.removeItem(atPath: dir) }
     }
 
-    /// Removes size folders Miles no longer makes (the 512 size was dropped to save disk space). Derived data only.
+    /// Removes size folders Miles no longer makes (512 and 128 were dropped to save disk space). Derived data only.
     public func removeObsoleteThumbnailSizes() {
         let keep = Set(ThumbnailSize.allCases.map { String($0.rawValue) })
         let base = directory + "/thumbnails"

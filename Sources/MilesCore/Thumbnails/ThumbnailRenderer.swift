@@ -3,8 +3,9 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// The cached sizes (longest edge in pixels). Each is a separate file under `thumbnails/<pixels>/` (ADR 0011).
+/// One size is kept: the app only ever read 256 (ADR 0016).
 public enum ThumbnailSize: Int, CaseIterable, Sendable {
-    case small = 128, medium = 256
+    case medium = 256
 }
 
 public enum ThumbnailRenderError: Error, Equatable, Sendable {

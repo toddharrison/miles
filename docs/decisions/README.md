@@ -37,3 +37,5 @@ What gets easier, what gets harder, and the costs we accept.
 - [0013](0013-project-structure-and-deployment-target.md): Project structure and deployment target
 - [0014](0014-layer-1-tag-namespaces.md): Layer 1 and 2 tag namespaces, and how the layers run
 - [0015](0015-ai-layers-and-fingerprints.md): AI layers, near-duplicate fingerprints and natural-language search
+- [0016](0016-single-thumbnail-size.md): One thumbnail size (256)
+- [0017](0017-folder-view-filter.md): Folder tree and folder view filter

@@ -1,6 +1,6 @@
 # 0011. Thumbnails and iCloud files
 
-- Status: accepted
+- Status: accepted (amended by [0016](0016-single-thumbnail-size.md): one thumbnail size)
 - Date: 2026-11-06
 
 ## Context

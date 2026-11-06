@@ -4,7 +4,7 @@ Structure and target are in [ADR 0013](decisions/0013-project-structure-and-depl
 
 **How to use this file:** it lists only work that is not done. Work top to bottom. Tick a box only when the task is done and its tests pass, and remove it (with its notes) once it has landed and the README covers it. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0015). Steps 0 to 9 and section A are implemented and removed from this file. What remains is below, mostly app UI.
+**Status:** design complete (ADRs 0001–0017). Steps 0 to 9 and section A are implemented and removed from this file. What remains is below, mostly app UI.
 
 ## Modules
 
@@ -22,6 +22,7 @@ Reviewed against the code on 2026-11-06. The library (`MilesCore`, `MilesAI`) an
 ### B. App: operations that change files
 - [ ] Duplicates view: exact groups and `dup:near` suggestions, preview, choose Trash, clone or keep each time, optional tag merge
 - [ ] Operations journal view with undo per batch, and the holdback list with early release
+- [ ] Per-folder managed mode: mark a subfolder managed inside an unmanaged root (needs an ADR amending 0001 and 0004; `addRoot` refuses nested roots today). The folder tree and its view filter are done (ADR 0017)
 - [ ] Managed roots: toggle managed mode, move and rename with preview, standardization rule editor and preview
 - [ ] Preview sheet shared by all bulk actions (counts, skips with reasons, bytes saved) before apply
 
