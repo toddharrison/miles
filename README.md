@@ -48,4 +48,4 @@ Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/). The concep
 
 ## Status
 
-Design is complete (ADRs 0001–0013). No code yet. The next step is Step 0 of [docs/PLAN.md](docs/PLAN.md). There are no open design questions.
+Design is complete (ADRs 0001–0013). Step 0 of [docs/PLAN.md](docs/PLAN.md) is done: Xcode project and Swift package skeleton, library create and open with a lock and schema gating, a library registry, and root overlap checks. The next step is Step 1 (indexing). There are no open design questions.

@@ -6,8 +6,11 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 
 ## Entities
 
+### Library
+- **library_meta**: key and value rows: `schema_version` (an older app refuses a higher value, ADR 0012), `library_id`, `created_at`. GRDB's own `grdb_migrations` table tracks applied migrations, and an unknown migration there is also refused.
+
 ### Locations
-- **root**: a directory Miles knows about. Holds path (volume plus relative path for external volumes) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions, and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
+- **root**: a directory Miles knows about. Holds volume ID plus path relative to the volume's mount point (always, not only for external volumes; the boot volume mounts at `/`) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions, and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
 - **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind, iCloud status, partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
 
 ### Tags ([ADR 0008](decisions/0008-tag-model.md))

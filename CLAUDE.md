@@ -19,7 +19,13 @@ Native macOS booru-style file manager (tags, search, duplicates), Swift/SwiftUI,
 - Design discussion is done. Implementation starts at PLAN.md Step 0. If something there is unclear or contradicts an ADR, stop and ask rather than guessing.
 
 ## Build, test, run
-Not set up yet. Step 0 creates the Xcode project and package. Record the real commands here when they exist.
+Layout: root `Package.swift` (modules `MilesCore`, `MilesAI`, executable `miles-cli`, tests in `Tests/`), and `Miles.xcodeproj` with the `MilesApp` target in `MilesApp/` depending on the package. The project uses synchronized folders, so new files in `MilesApp/` need no project edits.
+
+- Build the package: `swift build`
+- Test the package (Swift Testing): `swift test`; one suite: `swift test --filter LibraryTests`
+- CLI: `swift run miles-cli <command>` (currently `version`)
+- Build the app: `xcodebuild -project Miles.xcodeproj -scheme MilesApp -configuration Debug CODE_SIGNING_ALLOWED=NO build`
+- Tests use `FakeFileSystem` (`Tests/MilesCoreTests/Support`) for volumes, iCloud placeholders and moves, and real temp directories (`TempDir`) where SQLite needs a real file. Hold the `LibraryLock` or `Library` you acquire: dropping it releases the lock.
 
 ## Workflow notes
 - The user usually asks to "commit and continue". Commit docs and code together with a clear message, not part-way through an unverified step.

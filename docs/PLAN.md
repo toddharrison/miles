@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0013). No code yet. Next: Step 0.
+**Status:** design complete (ADRs 0001–0013). Step 0 done (skeleton, library create/open, lock, registry, roots overlap check). Next: Step 1.
 
 ## Modules
 
@@ -20,21 +20,21 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 Index a folder, browse it as a thumbnail grid, search by tag. Nothing in it can change a user's files.
 
 ## Step 0: Skeleton (ADR 0002, 0012, 0013)
-- [ ] Create the Xcode project (`MilesApp`, macOS 27 minimum, non-sandboxed) and the local Swift package with `MilesCore`, `MilesAI` and a `miles-cli` target
-- [ ] Add GRDB as a package dependency; confirm `MilesCore` imports no SwiftUI or AppKit
-- [ ] Filesystem protocol with a real implementation and a fake for tests (placeholders, missing drives, moves)
-- [ ] Swift Testing set up; one passing test per module
-- [ ] Record the real build, test and CLI commands in [CLAUDE.md](../CLAUDE.md)
-- [ ] Database setup with GRDB migrations; initial migration creates `root` and `file` plus the schema version record
-- [ ] Library create and open: location validation (local filesystem only, never iCloud or synced folders), refuse unavailable locations without creating a new library
-- [ ] Lock file with stale-lock detection and a way to take over; refuse to open a newer schema version
-- [ ] Library registry in app preferences
-- [ ] Volume-relative root paths (volume identity plus relative path)
-- [ ] Overlapping roots refused, including across libraries
-- [ ] Update README status and tick these boxes
+- [x] Create the Xcode project (`MilesApp`, macOS 27 minimum, non-sandboxed) and the local Swift package with `MilesCore`, `MilesAI` and a `miles-cli` target
+- [x] Add GRDB as a package dependency; confirm `MilesCore` imports no SwiftUI or AppKit
+- [x] Filesystem protocol with a real implementation and a fake for tests (placeholders, missing drives, moves)
+- [x] Swift Testing set up; one passing test per module
+- [x] Record the real build, test and CLI commands in [CLAUDE.md](../CLAUDE.md)
+- [x] Database setup with GRDB migrations; initial migration creates `root` and `file` plus the schema version record
+- [x] Library create and open: location validation (local filesystem only, never iCloud or synced folders), refuse unavailable locations without creating a new library
+- [x] Lock file with stale-lock detection and a way to take over; refuse to open a newer schema version
+- [x] Library registry in app preferences
+- [x] Volume-relative root paths (volume identity plus relative path)
+- [x] Overlapping roots refused, including across libraries
+- [x] Update README status and tick these boxes
 
 ## Step 1: Indexing of unmanaged roots (ADR 0001, 0004)
-- [ ] Add and remove roots (default mode unmanaged)
+- [ ] Add and remove roots (default mode unmanaged). `Library.addRoot` exists from Step 0 with the overlap checks; removal, exclusions and the CLI remain
 - [ ] Scanner: walk a root, write `file` rows (size, modified time, kind, volume and file ID)
 - [ ] Exclusions: `.photoslibrary` and other app-owned library packages never indexed
 - [ ] Re-match moved or renamed files by volume and file ID, then by hash
