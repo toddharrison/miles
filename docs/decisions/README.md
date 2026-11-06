@@ -34,3 +34,4 @@ What gets easier, what gets harder, and the costs we accept.
 - [0010](0010-tagging-sources.md): Automated tagging sources
 - [0011](0011-thumbnails.md): Thumbnails and iCloud files
 - [0012](0012-libraries-and-portable-mode.md): Libraries and portable mode
+- [0013](0013-project-structure-and-deployment-target.md): Project structure and deployment target
