@@ -2,10 +2,12 @@
 
 Conceptual model for the Miles database (SQLite via GRDB, [ADR 0002](decisions/0002-database-sqlite-grdb.md)). This describes entities and rules, not the final schema. Column names and types are settled during implementation and changed only through migrations.
 
+One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and-portable-mode.md)). Nothing here crosses libraries in v1. The database also records its schema version, and the library folder holds a lock file, the thumbnail cache ([ADR 0011](decisions/0011-thumbnails.md)) and backups.
+
 ## Entities
 
 ### Locations
-- **root**: a directory Miles knows about. Holds path and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions, and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
+- **root**: a directory Miles knows about. Holds path (volume plus relative path for external volumes) and bookmark, mode (`managed` or `unmanaged`, [ADR 0001](decisions/0001-storage-model.md)), exclusions, and an optional image standardization rule ([ADR 0006](decisions/0006-image-standardization.md)).
 - **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind, iCloud status, partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
 
 ### Tags ([ADR 0008](decisions/0008-tag-model.md))

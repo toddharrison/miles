@@ -30,3 +30,7 @@ What gets easier, what gets harder, and the costs we accept.
 - [0006](0006-image-standardization.md): Image standardization in managed roots
 - [0007](0007-duplicate-detection-and-resolution.md): Duplicate detection and resolution
 - [0008](0008-tag-model.md): Tag model
+- [0009](0009-query-syntax.md): Query syntax
+- [0010](0010-tagging-sources.md): Automated tagging sources
+- [0011](0011-thumbnails.md): Thumbnails and iCloud files
+- [0012](0012-libraries-and-portable-mode.md): Libraries and portable mode

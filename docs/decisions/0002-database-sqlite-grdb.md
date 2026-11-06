@@ -1,6 +1,6 @@
 # 0002. SQLite via GRDB
 
-- Status: accepted
+- Status: accepted, amended by [0012](0012-libraries-and-portable-mode.md) (portable libraries may live outside Application Support; never in iCloud)
 - Date: 2026-11-06
 
 ## Context

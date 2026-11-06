@@ -19,7 +19,7 @@ Miles is a booru-style file management system for Mac, built as a native applica
 | Storage modes | Both, chosen per directory by the user: **managed** (Miles owns the layout) and **unmanaged** (indexed in place, files never moved). Unmanaged/in-place is the primary expected use. |
 | Tags | Namespaced tags (`namespace:value`); un-namespaced tags are flat and use a default namespace. |
 | Tagging | Automated, with user override and user-specified tags. |
-| Search | Booru-style query syntax. |
+| Search | Booru-style query syntax: space is AND, `-` excludes, `or` and parentheses for OR, `key:value` filters, `~tag` for literal match. Filter keys are reserved. Natural-language search translates to this syntax and shows the query first. See ADR 0009. |
 | Users | Single user, local. May index iCloud Drive directories. |
 | Database | SQLite via GRDB. Stored in `~/Library/Application Support`, never in iCloud. |
 | Sandboxing | Non-sandboxed, direct distribution (Full Disk Access). Revisit only if App Store becomes a goal. |
@@ -39,11 +39,13 @@ Miles is a booru-style file management system for Mac, built as a native applica
 | Duplicates | Exact: size, then partial hash, then full hash. Near-duplicate image detection (perceptual hash) in v1, as suggestions only. The user chooses the resolution (Trash, APFS clone, or keep) every time; previewed, journaled, undoable. Unmanaged roots may be changed only by explicit user-initiated actions like this; Miles never acts on them on its own. |
 | Backup | Automatic, Miles' own data only (database, tags/rules export, journal), local only, rotated, with tested restore. Miles does not back up user files. |
 
+| Tagging sources | Layered: file metadata and path rules auto-apply; Vision/NaturalLanguage and optional LLM/VLM go to the review queue (optional auto-accept threshold). LLM layer is off by default per root. No prohibition on face identification; not in v1. See ADR 0010. |
+| Thumbnails | Local cache of files in the library folder, kept after iCloud eviction, never downloading just for a thumbnail by default. Optional per-root "fetch once" setting (off by default, batch approval). Excluded from backups. See ADR 0011. |
+| Libraries | Several independent libraries (v1: no cross-library features). Default library in Application Support; portable library in a chosen folder, e.g. an external drive, never in iCloud, local filesystem only. A root belongs to one library. Lock file, schema version gating, volume-relative paths. A macOS copy of the app may travel on the drive; v1 is macOS only. Image holdback is per volume. See ADR 0012. |
 | Tag model | Tags are per file (not shared across duplicates; duplicate resolution offers tag merge). Aliases and implications are in the schema from the start; their UI is deferred. v1 search covers file name, path and tags; document text and semantic search are deferred. |
 
 Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/). The conceptual data model is in [docs/DATA-MODEL.md](docs/DATA-MODEL.md).
 
 ## Open questions
 
-- **Automated tagging sources:** exact mix of Vision, NaturalLanguage, path-derived rules, file metadata, and optional VLM captions.
-- **Query syntax:** exact operators (`-tag`, `OR`, `type:`, `size:`, etc.).
+None at the moment. The next step is turning these decisions into an implementation plan.

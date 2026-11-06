@@ -1,6 +1,6 @@
 # 0005. Automated backup of Miles' own data
 
-- Status: accepted
+- Status: accepted, amended by [0012](0012-libraries-and-portable-mode.md) (backup destination for portable libraries)
 - Date: 2026-11-06
 
 ## Context
