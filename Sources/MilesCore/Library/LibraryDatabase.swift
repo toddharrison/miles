@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -60,7 +60,98 @@ enum LibraryDatabase {
                            arguments: [metaSchemaVersionKey, "1"])
         }
 
+        // Tags, search index and saved searches (ADR 0008, 0009).
+        migrator.registerMigration("v2-tags-search") { db in
+            try db.create(table: "namespace") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull().unique()
+                t.column("isDefault", .boolean).notNull().defaults(to: false)
+            }
+            try db.execute(sql: "INSERT INTO namespace (name, isDefault) VALUES (?, 1)", arguments: [TagName.defaultNamespace])
+
+            try db.create(table: "tag") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("namespaceID", .integer).notNull().references("namespace", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["namespaceID", "name"])
+            }
+            try db.create(table: "tag_alias") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("namespaceID", .integer).notNull().references("namespace", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("tagID", .integer).notNull().references("tag", onDelete: .cascade)
+                t.uniqueKey(["namespaceID", "name"])
+            }
+            try db.create(index: "tag_alias_on_tag", on: "tag_alias", columns: ["tagID"])
+            try db.create(table: "tag_implication") { t in
+                t.column("tagID", .integer).notNull().references("tag", onDelete: .cascade)
+                t.column("impliesTagID", .integer).notNull().references("tag", onDelete: .cascade)
+                t.primaryKey(["tagID", "impliesTagID"])
+                t.check(sql: "tagID <> impliesTagID")
+            }
+            try db.create(index: "tag_implication_on_implied", on: "tag_implication", columns: ["impliesTagID"])
+            try db.create(table: "file_tag") { t in
+                t.column("fileID", .integer).notNull().references("file", onDelete: .cascade)
+                t.column("tagID", .integer).notNull().references("tag", onDelete: .cascade)
+                t.column("source", .text).notNull().check { $0 == "user" || $0 == "rule" || $0 == "ai" }
+                t.column("confidence", .double)
+                t.column("status", .text).notNull().defaults(to: "accepted")
+                    .check { $0 == "accepted" || $0 == "suggested" || $0 == "rejected" }
+                t.column("provider", .text)
+                t.column("model", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.primaryKey(["fileID", "tagID"])
+            }
+            try db.create(index: "file_tag_on_tag", on: "file_tag", columns: ["tagID", "status"])
+
+            try db.create(table: "saved_search") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull().unique()
+                t.column("query", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
+
+            // FTS5 over file name, path and accepted tags. Rowid is file.id. Triggers keep it in step
+            // so the scanner and the tag store never have to think about it.
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE file_fts USING fts5(name, path, tags, tokenize = 'unicode61 remove_diacritics 2')
+                """)
+            try db.execute(sql: """
+                INSERT INTO file_fts (rowid, name, path, tags)
+                SELECT id, \(nameSQL("relativePath")), relativePath, '' FROM file
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER file_fts_insert AFTER INSERT ON file BEGIN
+                  INSERT INTO file_fts (rowid, name, path, tags) VALUES (NEW.id, \(nameSQL("NEW.relativePath")), NEW.relativePath, '');
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER file_fts_path AFTER UPDATE OF relativePath ON file WHEN OLD.relativePath <> NEW.relativePath BEGIN
+                  UPDATE file_fts SET name = \(nameSQL("NEW.relativePath")), path = NEW.relativePath WHERE rowid = NEW.id;
+                END
+                """)
+            try db.execute(sql: "CREATE TRIGGER file_fts_delete AFTER DELETE ON file BEGIN DELETE FROM file_fts WHERE rowid = OLD.id; END")
+            for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+                try db.execute(sql: """
+                    CREATE TRIGGER file_tag_fts_\(event.lowercased()) AFTER \(event) ON file_tag BEGIN
+                      UPDATE file_fts SET tags = COALESCE((
+                        SELECT group_concat(n.name || ':' || t.name, ' ')
+                        FROM file_tag ft JOIN tag t ON t.id = ft.tagID JOIN namespace n ON n.id = t.namespaceID
+                        WHERE ft.fileID = \(row).fileID AND ft.status = 'accepted'), '')
+                      WHERE rowid = \(row).fileID;
+                    END
+                    """)
+            }
+        }
+
         return migrator
+    }
+
+    /// SQL for the last path component of `path`, since SQLite has no basename. Removes the leading
+    /// directory part, which ends in a slash and so cannot occur inside the name.
+    static func nameSQL(_ path: String) -> String {
+        "replace(\(path), rtrim(\(path), replace(\(path), '/', '')), '')"
     }
 
     static func configuration(readonly: Bool = false) -> Configuration {

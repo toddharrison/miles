@@ -17,6 +17,18 @@ enum CLI {
       root list
       scan [--root <id>]                      scan one or all roots
       list [--root <id>] [--missing] [--limit <n>]
+      query [--limit <n>] [--count] <query>   search (tags, "text", filters; see below). Prints file id, root, size, kind, path
+      tag add <file-id> <tag>...              tag a file as the user (ns:value, or flat)
+      tag remove <file-id> <tag>...
+      tag show <file-id>                      tags on a file, with source and status
+      tag list                                every tag with its file count
+      tag alias <alias> <tag> | tag unalias <alias>
+      tag imply <tag> <implied> | tag unimply <tag> <implied>
+      search save <name> <query> [--replace] | search list | search run <name> | search delete <name>
+
+    Query syntax: a space is AND, 'or', -exclude, (groups), foo*, ns:value, ~literal (no alias or implication),
+    "text in name or path", and filters type: ext: size: date: root: path: dup:exact tagged source: status:
+    missing: sort:. Example: (cat or dog) -ns:old size:>5mb sort:-date
 
     The library is --library, or $MILES_LIBRARY, or the default registered library.
     """
@@ -56,12 +68,15 @@ enum CLI {
         case "library":
             try libraryCommand(&args, fs: fs, registry: registry)
 
-        case "root", "scan", "list":
+        case "root", "scan", "list", "query", "tag", "search":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
             switch command {
             case "root": try rootCommand(&args, library: library, fs: fs, registry: registry)
             case "scan": try scanCommand(&args, library: library, fs: fs)
+            case "query": try queryCommand(&args, library: library)
+            case "tag": try tagCommand(&args, library: library)
+            case "search": try searchCommand(&args, library: library)
             default: try listCommand(&args, library: library)
             }
 
@@ -176,6 +191,105 @@ enum CLI {
             if file.icloudStatus != "local" { flags += " [\(file.icloudStatus)]" }
             if file.missingSince != nil { flags += " [missing]" }
             print("\(file.rootID)\t\(file.size)\t\(file.kind ?? "-")\t\(file.relativePath)\(flags)")
+        }
+    }
+
+    // MARK: query, tag, search
+
+    static func queryCommand(_ args: inout [String], library: Library) throws {
+        let limit = try take("--limit", from: &args).map { value -> Int in
+            guard let n = Int(value), n > 0 else { throw Failure(message: "--limit needs a positive number") }
+            return n
+        }
+        let countOnly = takeFlag("--count", from: &args)
+        let query = args.joined(separator: " ")
+        do {
+            if countOnly { print(try library.searchCount(query)); return }
+            printFiles(try library.search(query, limit: limit))
+        } catch let error as QueryError {
+            var message = error.message
+            if let offset = error.offset {
+                message += "\n  \(query)\n  \(String(repeating: " ", count: offset))^"
+            }
+            throw Failure(message: message)
+        }
+    }
+
+    static func printFiles(_ files: [IndexedFile]) {
+        for file in files {
+            var flags = ""
+            if file.icloudStatus != "local" { flags += " [\(file.icloudStatus)]" }
+            if file.missingSince != nil { flags += " [missing]" }
+            print("\(file.id)\t\(file.rootID)\t\(file.size)\t\(file.kind ?? "-")\t\(file.relativePath)\(flags)")
+        }
+    }
+
+    static func fileID(_ value: String?) throws -> Int64 {
+        guard let value, let id = Int64(value) else { throw Failure(message: "expected a file id (the first column of 'query' output)") }
+        return id
+    }
+
+    static func tagCommand(_ args: inout [String], library: Library) throws {
+        let usage = "usage: tag add|remove <file-id> <tag>... | tag show <file-id> | tag list | tag alias <alias> <tag> | tag unalias <alias> | tag imply|unimply <tag> <implied>"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "add", "remove":
+            let id = try fileID(args.first)
+            let tags = Array(args.dropFirst())
+            if tags.isEmpty { throw Failure(message: "tag \(sub) needs at least one tag") }
+            for tag in tags {
+                if sub == "add" {
+                    print("tagged \(id): \(try library.addTag(tag, toFile: id).display)")
+                } else {
+                    print(try library.removeTag(tag, fromFile: id) ? "removed \(tag) from \(id)" : "\(id) had no \(tag) to remove")
+                }
+            }
+        case "show":
+            for t in try library.tags(forFile: try fileID(args.first), includeRejected: true) {
+                var line = "\(t.name.display)\t\(t.source)\t\(t.status)"
+                if let c = t.confidence { line += "\t\(String(format: "%.2f", c))" }
+                print(line)
+            }
+        case "list":
+            for t in try library.allTags() { print("\(t.fileCount)\t\(t.name.display)") }
+        case "alias":
+            guard args.count == 2 else { throw Failure(message: "usage: tag alias <alias> <tag>") }
+            try library.setAlias(args[0], for: args[1])
+            print("\(args[0]) is now an alias for \(args[1])")
+        case "unalias":
+            guard args.count == 1 else { throw Failure(message: "usage: tag unalias <alias>") }
+            try library.removeAlias(args[0])
+        case "imply", "unimply":
+            guard args.count == 2 else { throw Failure(message: "usage: tag \(sub) <tag> <implied>") }
+            if sub == "imply" { try library.addImplication(args[0], implies: args[1]) } else { try library.removeImplication(args[0], implies: args[1]) }
+            print("\(args[0]) \(sub == "imply" ? "now implies" : "no longer implies") \(args[1])")
+        default:
+            throw Failure(message: usage)
+        }
+    }
+
+    static func searchCommand(_ args: inout [String], library: Library) throws {
+        let usage = "usage: search save <name> <query> [--replace] | search list | search run <name> | search delete <name>"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "save":
+            let replace = takeFlag("--replace", from: &args)
+            guard let name = args.first else { throw Failure(message: usage) }
+            let saved = try library.saveSearch(name: name, query: args.dropFirst().joined(separator: " "), overwrite: replace)
+            print("saved '\(saved.name)': \(saved.query)")
+        case "list":
+            for s in try library.savedSearches() { print("\(s.name)\t\(s.query)") }
+        case "run":
+            guard let name = args.first else { throw Failure(message: usage) }
+            printFiles(try library.runSavedSearch(name: name))
+        case "delete":
+            guard let name = args.first else { throw Failure(message: usage) }
+            try library.deleteSavedSearch(name: name)
+            print("deleted '\(name)'")
+        default:
+            throw Failure(message: usage)
         }
     }
 

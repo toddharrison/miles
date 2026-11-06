@@ -13,7 +13,7 @@ struct LibraryTests {
         defer { try? library.close() }
 
         #expect(fs.exists(library.databasePath))
-        #expect(try library.schemaVersion == 1)
+        #expect(try library.schemaVersion == 2)
         let tables = try library.database.read { try String.fetchAll($0, sql: "SELECT name FROM sqlite_master WHERE type='table'") }
         #expect(tables.contains("root"))
         #expect(tables.contains("file"))
@@ -96,7 +96,7 @@ struct LibraryTests {
         }
         try library.close()
 
-        #expect(throws: LibraryError.newerSchema(found: 99, supported: 1)) { try Library.open(at: dir, fileSystem: fs) }
+        #expect(throws: LibraryError.newerSchema(found: 99, supported: 2)) { try Library.open(at: dir, fileSystem: fs) }
         // Refusal released the lock, and nothing was migrated or rewritten.
         #expect(!fs.exists(dir + "/lock.json"))
         #expect(try LibraryDatabase.recordedSchemaVersion(atPath: dir + "/library.sqlite") == 99)

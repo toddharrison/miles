@@ -14,11 +14,11 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **file**: one row per file. Holds root, relative path, volume and file ID, size, modified time, kind (`image`, `video`, `audio`, `document`, `text`, `archive`, `other`, from the extension), iCloud status (`local` or `dataless`), partial hash, full hash (nullable until computed), first seen, last seen, and missing-since.
 
 ### Tags ([ADR 0008](decisions/0008-tag-model.md))
-- **namespace**: tag namespaces, with one default namespace for flat tags.
-- **tag**: a namespaced name, unique per namespace.
-- **tag_alias**: maps an alternate name to a canonical tag.
-- **tag_implication**: a tag implies another tag.
-- **file_tag**: file, tag, source (`user`, `rule`, `ai`), confidence, status (`accepted`, `suggested`, `rejected`), provider and model, created time.
+- **namespace**: tag namespaces, with one default namespace (`general`) for flat tags. A namespace named like a query filter key is refused ([ADR 0009](decisions/0009-query-syntax.md)); so is a flat tag named `tagged`, which is a query keyword.
+- **tag**: a namespaced name, unique per namespace. Names are lowercased, inner whitespace becomes `_`, and `( ) " * ~ :` are not allowed in them.
+- **tag_alias**: maps an alternate name (unique per namespace) to a canonical tag. A name that is already a real tag cannot become an alias. Adding a tag by an alias name applies the canonical tag.
+- **tag_implication**: a tag implies another tag. Searches follow implications transitively; cycles are harmless.
+- **file_tag**: one row per file and tag: source (`user`, `rule`, `ai`), confidence, status (`accepted`, `suggested`, `rejected`), provider and model, created time. Only `accepted` rows match a tag search. A user adding a tag turns any existing row for it into an accepted user row. A user removing a user tag deletes the row; removing a rule or AI tag marks it `rejected`.
 - **tag_rule**: a path or metadata pattern, scoped to a root, mapped to a tag ([ADR 0003](decisions/0003-ai-provider-abstraction.md)).
 
 ### Duplicates ([ADR 0007](decisions/0007-duplicate-detection-and-resolution.md))
@@ -34,7 +34,8 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **job**: kind, file, state, attempts, provider and model, error.
 
 ### Search
-- **FTS5 index** over file name, path and tags. Document text is not indexed in v1.
+- **file_fts**: FTS5 table over file name, path and accepted tags, with `file.id` as rowid, kept in step by triggers on `file` and `file_tag`. A quoted string in a query matches the name and path columns (the last word as a prefix); the tags column is indexed for later use. Document text is not indexed in v1.
+- **saved_search**: name and query string. Saved searches store the text, so they follow later alias and implication changes.
 
 ## Rules
 
@@ -46,6 +47,7 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **Scanning reads metadata only.** Symbolic links, `.DS_Store` and AppleDouble files are not indexed, and other volumes mounted inside a root are not entered. A file whose size, modified time or file ID changed has its hashes cleared. A file seen at its old path again is no longer missing. A new path is matched to an unseen row whose old path is gone by volume and file ID, then by full hash (only when exactly one such row has that hash); the row keeps its identity, so tags survive.
 - **`operation` is the only way Miles changes files.** Every move, rename, trash, resize and clone writes an operation row before it runs, and undo reads from it.
 - **Hashes live on `file`.** Perceptual fingerprints are separate because they are versioned and optional.
+- **Query semantics** ([ADR 0009](decisions/0009-query-syntax.md)): missing files are hidden unless the query has a `missing:` filter. `source:` and `status:` terms ANDed together describe the same `file_tag` row. `size:` units are decimal (1 kb = 1000 bytes). A `date:` value of `2024`, `2024-05` or `2024-05-31` covers that whole period in the local time zone. `created:` and `dup:near` are not available yet (no creation date or fingerprints indexed).
 - **Backups** copy this database and a JSON export of tags and rules ([ADR 0005](decisions/0005-backup-of-miles-data.md)).
 
 ## Deferred

@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0013). Steps 0 and 1 done (skeleton and libraries; indexing of unmanaged roots). Next: Step 2.
+**Status:** design complete (ADRs 0001–0013). Steps 0 to 2 done (skeleton and libraries; indexing of unmanaged roots; tags and search). Next: Step 3.
 
 ## Modules
 
@@ -42,18 +42,24 @@ Index a folder, browse it as a thumbnail grid, search by tag. Nothing in it can 
 - [x] iCloud status: detect dataless files, index metadata only, never trigger a download
 - [x] File-change events plus periodic reconciliation
 - [x] `miles-cli scan` and `miles-cli list`
-- [x] Million-file synthetic scale test (`MILES_SCALE_TESTS=1 swift test --filter ScaleTests/millionFiles`; about 37 s first scan and 10 s rescan in a debug build. A 50,000-file variant runs in every `swift test`)
+- [x] Million-file synthetic scale test (`MILES_SCALE_TESTS=1 swift test --filter ScaleTests/millionFiles`; about 43 s first scan and 8 s rescan in a debug build, with the search index maintained. A 50,000-file variant runs in every `swift test`)
 
 ## Step 2: Tags and search (ADR 0008, 0009)
-- [ ] Migrations: `namespace`, `tag`, `tag_alias`, `tag_implication`, `file_tag`
-- [ ] Default namespace for flat tags; reserved filter keys refused as namespaces
-- [ ] Manual tag add and remove (`user` source)
-- [ ] Query grammar and parser with tests: AND, `-`, `or`, parentheses, wildcards, quoted text, filters, `~` literal
-- [ ] Compile queries to SQL; alias resolution and implication expansion
-- [ ] FTS5 over name, path and tags
-- [ ] Clear parse errors, no loose-text fallback
-- [ ] Saved searches stored as query strings
-- [ ] `miles-cli query`
+- [x] Migrations: `namespace`, `tag`, `tag_alias`, `tag_implication`, `file_tag`
+- [x] Default namespace for flat tags; reserved filter keys refused as namespaces
+- [x] Manual tag add and remove (`user` source)
+- [x] Query grammar and parser with tests: AND, `-`, `or`, parentheses, wildcards, quoted text, filters, `~` literal
+- [x] Compile queries to SQL; alias resolution and implication expansion
+- [x] FTS5 over name, path and tags
+- [x] Clear parse errors, no loose-text fallback
+- [x] Saved searches stored as query strings
+- [x] `miles-cli query`
+
+Notes from Step 2:
+- `created:`, `sort:created` and `dup:near` parse but fail with a clear error: the `file` table has no creation date yet, and fingerprints arrive with Step 6 and later. Add a creation-date column (scanner and `FileSystem` change, with a migration) when `created:` is wanted.
+- `dup:exact` works from `file.fullHash`, so it finds nothing until the Step 6 hashing pipeline fills hashes.
+- A bare `tagged` is the filter (`-tagged` finds untagged files), so a flat tag named `tagged` is refused.
+- Million-file scale test after the FTS triggers: about 43 s first scan and 8 s rescan (debug build).
 
 ## Step 3: Thumbnails and grid (ADR 0011)
 - [ ] Thumbnail cache as files in the library folder, several sizes, keyed by file identity
