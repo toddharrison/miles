@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -159,6 +159,56 @@ enum LibraryDatabase {
             }
         }
 
+        // Job queue, automated tagging layers and path rules (ADR 0003, 0010, 0014).
+        migrator.registerMigration("v4-jobs-layers-rules") { db in
+            // Namespaces the layers write to are labelled system-managed. The user may still add tags in them.
+            try db.alter(table: "namespace") { t in t.add(column: "isSystem", .boolean).notNull().defaults(to: false) }
+            // Which layer (1 metadata, 2 path rules, ...) made a rule or AI row, so a layer can be re-run alone.
+            try db.alter(table: "file_tag") { t in t.add(column: "layer", .integer) }
+            // Bumped on every rule change; layer 2 re-runs for files whose last run saw an older revision.
+            try db.alter(table: "root") { t in t.add(column: "ruleRevision", .integer).notNull().defaults(to: 0) }
+
+            try db.create(table: "tag_rule") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("rootID", .integer).notNull().references("root", onDelete: .cascade)
+                t.column("pattern", .text).notNull()        // folder pattern, relative to the root
+                t.column("tag", .text).notNull()            // tag template; {1}, {2} insert what the wildcards matched
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["rootID", "pattern", "tag"])
+            }
+
+            // What each layer last saw for each file; a difference means the layer is due again.
+            try db.create(table: "file_layer_run") { t in
+                t.column("fileID", .integer).notNull().references("file", onDelete: .cascade)
+                t.column("layer", .integer).notNull()
+                t.column("version", .integer).notNull()
+                t.column("sourceSize", .integer).notNull()
+                t.column("sourceModified", .datetime).notNull()
+                t.column("sourcePath", .text).notNull()
+                t.column("complete", .boolean).notNull().defaults(to: true)   // false: content was not readable (placeholder)
+                t.column("doneAt", .datetime).notNull()
+                t.primaryKey(["fileID", "layer"])
+            }
+
+            try db.create(table: "job") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("kind", .text).notNull()
+                t.column("fileID", .integer).references("file", onDelete: .cascade)
+                t.column("state", .text).notNull().defaults(to: "queued")
+                    .check { $0 == "queued" || $0 == "running" || $0 == "failed" }
+                t.column("attempts", .integer).notNull().defaults(to: 0)
+                t.column("provider", .text)
+                t.column("model", .text)
+                t.column("error", .text)
+                t.column("notBefore", .datetime)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            // A file has at most one waiting or running job of a kind. Finished jobs are deleted.
+            try db.execute(sql: "CREATE UNIQUE INDEX job_one_pending ON job(kind, fileID) WHERE state IN ('queued', 'running')")
+            try db.create(index: "job_on_state", on: "job", columns: ["state", "id"])
+        }
+
         return migrator
     }
 
@@ -194,6 +244,16 @@ enum LibraryDatabase {
         try writer.write { db in
             try db.execute(sql: "INSERT OR REPLACE INTO library_meta (key, value) VALUES (?, ?)",
                            arguments: [metaSchemaVersionKey, String(currentSchemaVersion)])
+        }
+    }
+
+    /// True if a database that already has data (some migration applied) still has migrations to run.
+    /// A brand-new database has nothing to back up.
+    static func hasPendingMigrationsOnExistingDatabase(_ writer: some DatabaseWriter) throws -> Bool {
+        let migrator = makeMigrator()
+        return try writer.read { db in
+            let completed = try migrator.completedMigrations(db)
+            return !completed.isEmpty && completed.count < migrator.migrations.count
         }
     }
 

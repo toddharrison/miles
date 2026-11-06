@@ -54,7 +54,11 @@ extension Library {
     /// removed; nothing on disk is touched. Returns how many file records were dropped.
     @discardableResult
     public func removeRoot(id rootID: Int64) throws -> Int {
-        try database.write { db in
+        // Dropping a root cascades to its files and their tags: a bulk change to Miles' data (ADR 0005).
+        // The snapshot is taken only when there is something to lose, and a failed snapshot stops the removal.
+        let hasRecords = try database.read { try Bool.fetchOne($0, sql: "SELECT EXISTS(SELECT 1 FROM file WHERE rootID = ?)", arguments: [rootID]) } ?? false
+        if hasRecords { try backupBeforeBulkOperation() }
+        return try database.write { db in
             guard try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM root WHERE id = ?)", arguments: [rootID]) == true else {
                 throw LibraryError.invalidRoot("root \(rootID)")
             }

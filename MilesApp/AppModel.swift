@@ -10,6 +10,8 @@ final class AppModel {
     let registry = LibraryRegistry(preferences: UserDefaultsPreferences(UserDefaults(suiteName: "app.miles.Miles") ?? .standard))
 
     private(set) var library: Library?
+    /// Background tagging (layers 1 and 2). Throttled; waits on battery power or a busy Mac (ADR 0003).
+    private var jobQueue: JobQueue?
     private(set) var libraryName: String?
     private(set) var libraries: [LibraryRecord] = []
     private(set) var roots: [RootRecord] = []
@@ -47,8 +49,22 @@ final class AppModel {
             selectedRootID = nil
             reloadRoots()
             refresh()
+            runScheduledBackup()
+            startJobQueue(for: opened)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Takes the daily snapshot of Miles' own data when one is due (ADR 0005). A failed backup is shown, not swallowed.
+    private func runScheduledBackup() {
+        guard let library else { return }
+        Task {
+            let error = await Task.detached { () -> String? in
+                do { _ = try library.runScheduledBackupIfDue(); return nil }
+                catch { return "Backup failed: \(error.localizedDescription)" }
+            }.value
+            if let error, self.library === library { errorMessage = error }
         }
     }
 
@@ -70,12 +86,25 @@ final class AppModel {
             selectedRootID = nil
             reloadRoots()
             refresh()
+            startJobQueue(for: created)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
+    /// Queues whatever tagging is due, then works through it in the background.
+    private func startJobQueue(for library: Library) {
+        let queue = JobQueue(library: library, handlers: library.taggingHandlers(fileSystem: fileSystem))
+        jobQueue = queue
+        Task.detached {
+            _ = try? library.enqueueStaleTaggingJobs()
+            queue.start()
+        }
+    }
+
     func closeLibrary() {
+        jobQueue?.stop()
+        jobQueue = nil
         try? library?.close()
         library = nil
         roots = []
@@ -143,6 +172,7 @@ final class AppModel {
                 var pending: FetchPlan?
                 do {
                     for id in ids { try library.scan(rootID: id, fileSystem: fs) }
+                    try library.enqueueStaleTaggingJobs()
                     let service = ThumbnailService(library: library, fileSystem: fs)
                     _ = try service.generateMissing()
                     for root in try library.roots() where root.fetchOnce {

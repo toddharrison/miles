@@ -139,7 +139,7 @@ extension Library {
         }
     }
 
-    private func ensureNamespace(_ db: Database, _ name: String) throws -> Int64 {
+    func ensureNamespace(_ db: Database, _ name: String) throws -> Int64 {
         try db.execute(sql: "INSERT OR IGNORE INTO namespace (name, isDefault) VALUES (?, 0)", arguments: [name])
         return try Int64.fetchOne(db, sql: "SELECT id FROM namespace WHERE name = ?", arguments: [name])!
     }
@@ -150,7 +150,7 @@ extension Library {
     }
 
     /// The tag's id, following an alias. Creates the tag (and namespace) when asked and nothing matches.
-    private func canonicalTagID(_ db: Database, for name: TagName, createIfMissing: Bool) throws -> Int64? {
+    func canonicalTagID(_ db: Database, for name: TagName, createIfMissing: Bool) throws -> Int64? {
         if let id = try existingTagID(db, name) { return id }
         if let id = try Int64.fetchOne(db, sql: """
             SELECT a.tagID FROM tag_alias a JOIN namespace n ON n.id = a.namespaceID WHERE n.name = ? AND a.name = ?

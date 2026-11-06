@@ -35,3 +35,4 @@ What gets easier, what gets harder, and the costs we accept.
 - [0011](0011-thumbnails.md): Thumbnails and iCloud files
 - [0012](0012-libraries-and-portable-mode.md): Libraries and portable mode
 - [0013](0013-project-structure-and-deployment-target.md): Project structure and deployment target
+- [0014](0014-layer-1-tag-namespaces.md): Layer 1 and 2 tag namespaces, and how the layers run

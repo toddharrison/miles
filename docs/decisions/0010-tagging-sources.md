@@ -1,6 +1,6 @@
 # 0010. Automated tagging sources
 
-- Status: accepted
+- Status: accepted, amended by [0014](0014-layer-1-tag-namespaces.md) (layer 1 uses `kind:` rather than `type:`, which ADR 0009 reserves)
 - Date: 2026-11-06
 
 ## Context

@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// An open library: one database plus the lock that guards it (ADR 0012).
-/// Layout of a library folder: `library.sqlite`, `lock.json`, and later `thumbnails/` and `backups/`.
+/// Layout of a library folder: `library.sqlite`, `lock.json`, `thumbnails/` and `backups/`.
 public final class Library: @unchecked Sendable {
     public static let databaseFileName = "library.sqlite"
 
@@ -80,7 +80,11 @@ public final class Library: @unchecked Sendable {
                 throw LibraryError.newerSchema(found: LibraryDatabase.currentSchemaVersion + 1,
                                                supported: LibraryDatabase.currentSchemaVersion)
             }
-            // TODO(PLAN Step 4): snapshot the database before applying pending migrations.
+            // A newer app takes a backup first, then migrates (ADR 0012). If the backup fails, nothing is migrated.
+            if try LibraryDatabase.hasPendingMigrationsOnExistingDatabase(pool) {
+                let version = try LibraryDatabase.recordedSchemaVersion(atPath: dbPath) ?? 0
+                try Library.snapshot(of: pool, into: directory + "/" + BackupNaming.folder, kind: .preMigration, schemaVersion: version, now: Date())
+            }
             try LibraryDatabase.migrate(pool)
             let idString = try pool.read { db in
                 try String.fetchOne(db, sql: "SELECT value FROM library_meta WHERE key = ?",

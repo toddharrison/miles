@@ -29,6 +29,14 @@ enum CLI {
       tag list                                every tag with its file count
       tag alias <alias> <tag> | tag unalias <alias>
       tag imply <tag> <implied> | tag unimply <tag> <implied>
+      backup now | backup list                snapshot Miles' own data now (database plus a JSON export of tags), or list snapshots
+      restore list                            snapshots available to restore (the library must not be open elsewhere)
+      restore <snapshot|latest> [--apply]     show what restoring would do; --apply does it (the current database is kept first)
+      rule add <root-id> <folder-pattern> <tag>   layer 2: tag files under matching folders. '*' captures, '{1}' inserts it: Games/* game:{1}
+      rule list | rule remove <id>
+      jobs status | jobs run [--limit <n>] [--ignore-conditions]   work the background queue (waits on battery or a busy Mac unless told not to)
+      jobs enqueue | jobs retry | jobs clear-failed | jobs failed
+      jobs rerun metadata|rules [--root <id>]     redo a tagging layer; user tags and rejected tags are kept
       search save <name> <query> [--replace] | search list | search run <name> | search delete <name>
 
     Query syntax: a space is AND, 'or', -exclude, (groups), foo*, ns:value, ~literal (no alias or implication),
@@ -73,7 +81,10 @@ enum CLI {
         case "library":
             try libraryCommand(&args, fs: fs, registry: registry)
 
-        case "root", "scan", "list", "query", "tag", "search", "thumbs":
+        case "restore":
+            try restoreCommand(&args, option: libraryOption, fs: fs, registry: registry, takeOver: takeOver)
+
+        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
             switch command {
@@ -83,6 +94,9 @@ enum CLI {
             case "tag": try tagCommand(&args, library: library)
             case "search": try searchCommand(&args, library: library)
             case "thumbs": try thumbsCommand(&args, library: library, fs: fs)
+            case "backup": try backupCommand(&args, library: library)
+            case "rule": try ruleCommand(&args, library: library)
+            case "jobs": try jobsCommand(&args, library: library, fs: fs)
             default: try listCommand(&args, library: library)
             }
 
@@ -132,6 +146,59 @@ enum CLI {
             throw Failure(message: "no library: pass --library <dir>, set MILES_LIBRARY, or run 'library create <dir>'")
         }
         return try registry.open(id, fileSystem: fs, takeOverLock: takeOver)
+    }
+
+    // MARK: backup and restore
+
+    static func backupCommand(_ args: inout [String], library: Library) throws {
+        switch args.first {
+        case "now":
+            let info = try library.createBackup(kind: .manual)
+            print("wrote \(info.path) (\(info.size) bytes, schema v\(info.schemaVersion))")
+            if let export = info.exportPath { print("wrote \(export)") }
+        case "list":
+            for info in try library.backups() { printBackup(info) }
+        default:
+            throw Failure(message: "usage: backup now | backup list")
+        }
+    }
+
+    static func printBackup(_ info: BackupInfo) {
+        print("\(info.name)\t\(info.kind.rawValue)\tschema v\(info.schemaVersion)\t\(info.size) bytes\(info.exportPath == nil ? "" : "\t+export")")
+    }
+
+    /// Restore works on a closed library, so it resolves the folder itself instead of opening it.
+    static func restoreCommand(_ args: inout [String], option: String?, fs: FileSystem, registry: LibraryRegistry, takeOver: Bool) throws {
+        let apply = takeFlag("--apply", from: &args)
+        guard let what = args.first else { throw Failure(message: "usage: restore list | restore <snapshot|latest> [--apply]") }
+        guard let directory = try libraryDirectory(option, fs: fs, registry: registry) else {
+            throw Failure(message: "no library: pass --library <dir>, set MILES_LIBRARY, or register one")
+        }
+        if what == "list" {
+            for info in LibraryRestore.snapshots(inLibraryAt: directory) { printBackup(info) }
+            return
+        }
+        let path = try LibraryRestore.resolveSnapshot(what, libraryDirectory: directory)
+        let preview = try LibraryRestore.preview(snapshotPath: path)
+        print("snapshot \((path as NSString).lastPathComponent): schema v\(preview.schemaVersion), \(preview.roots) roots, \(preview.files) files, \(preview.tags) tags")
+        if preview.willMigrate { print("it is older than this build (v\(preview.currentSchemaVersion)) and will be migrated forward") }
+        guard apply else {
+            print("dry run: nothing changed. Add --apply to restore into \(directory). The current database is kept as a pre-restore snapshot first and thumbnails are rebuilt.")
+            return
+        }
+        let result = try LibraryRestore.restore(snapshotPath: path, toLibraryAt: directory, fileSystem: fs, takeOverLock: takeOver)
+        print("restored\(result.migrated ? " and migrated forward" : "")")
+        if let kept = result.safetyBackup { print("previous database kept at \(kept)") }
+        print("run 'scan' to bring the index up to date with the files on disk")
+    }
+
+    static func libraryDirectory(_ option: String?, fs: FileSystem, registry: LibraryRegistry) throws -> String? {
+        if let path = option ?? ProcessInfo.processInfo.environment["MILES_LIBRARY"] { return URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        guard let id = registry.defaultLibraryID, let record = registry.libraries.first(where: { $0.id == id }) else { return nil }
+        guard let path = record.location.resolve(fileSystem: fs) else {
+            throw Failure(message: "the default library's drive is not mounted")
+        }
+        return path
     }
 
     // MARK: root
@@ -188,6 +255,89 @@ enum CLI {
             if r.missingCheckSkipped { line += "\n  too many skipped directories: missing-file check not run" }
             print(line)
         }
+        let queued = try library.enqueueStaleTaggingJobs()
+        if queued > 0 { print("queued \(queued) tagging jobs; run them with 'jobs run'") }
+    }
+
+    // MARK: rules and jobs
+
+    static func ruleCommand(_ args: inout [String], library: Library) throws {
+        let usage = "usage: rule add <root-id> <folder-pattern> <tag> | rule list | rule remove <id>"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "add":
+            guard args.count == 3 else { throw Failure(message: usage) }
+            let rule = try library.addTagRule(rootID: try rootID(args[0]), pattern: args[1], tag: args[2])
+            print("rule \(rule.id): \(rule.pattern) -> \(rule.tag); run 'jobs run' to apply it")
+        case "list":
+            for rule in try library.tagRules() { print("\(rule.id)\troot \(rule.rootID)\t\(rule.pattern)\t\(rule.tag)") }
+        case "remove":
+            guard let id = args.first.flatMap({ Int64($0) }) else { throw Failure(message: usage) }
+            try library.removeTagRule(id: id)
+            print("removed rule \(id); run 'jobs run' to update tags")
+        default:
+            throw Failure(message: usage)
+        }
+    }
+
+    static func jobsCommand(_ args: inout [String], library: Library, fs: FileSystem) throws {
+        let usage = "usage: jobs status | jobs run [--limit <n>] [--ignore-conditions] | jobs enqueue | jobs retry | jobs clear-failed | jobs failed | jobs rerun metadata|rules [--root <id>]"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "status":
+            let c = try library.jobCounts()
+            print("\(c.queued) queued, \(c.running) running, \(c.failed) failed")
+        case "enqueue":
+            print("queued \(try library.enqueueStaleTaggingJobs()) jobs")
+        case "run":
+            let ignore = takeFlag("--ignore-conditions", from: &args)
+            let limit = try take("--limit", from: &args).map { value -> Int in
+                guard let n = Int(value), n > 0 else { throw Failure(message: "--limit needs a positive number") }
+                return n
+            }
+            try library.recoverInterruptedJobs()
+            let queue = JobQueue(library: library, handlers: library.taggingHandlers(fileSystem: fs),
+                                 conditions: ignore ? NoConditions() : SystemConditions())
+            let summary = blocking { await queue.runUntilIdle(limit: limit) }
+            print("ran \(summary.processed) jobs, \(summary.failed) failed")
+            switch summary.end {
+            case .paused(let reason): print("paused: \(reason) (use --ignore-conditions to run anyway)")
+            case .limit: print("stopped at the limit; \(try library.jobCounts().queued) still queued")
+            default: break
+            }
+        case "retry":
+            print("retrying \(try library.retryFailedJobs()) failed jobs")
+        case "clear-failed":
+            print("cleared \(try library.clearFailedJobs()) failed jobs")
+        case "failed":
+            for job in try library.jobs(state: .failed) {
+                print("\(job.id)\t\(job.kind.rawValue)\tfile \(job.fileID.map(String.init) ?? "-")\t\(job.error ?? "")")
+            }
+        case "rerun":
+            let only = try take("--root", from: &args).map { try rootID($0) }
+            let layer: TagLayer
+            switch args.first {
+            case "metadata": layer = .metadata
+            case "rules": layer = .pathRules
+            default: throw Failure(message: usage)
+            }
+            print("queued \(try library.rerunLayer(layer, rootID: only)) jobs")
+        default:
+            throw Failure(message: usage)
+        }
+    }
+
+    final class Box<V>: @unchecked Sendable { var value: V? }
+
+    /// Runs async work to completion from the synchronous command line.
+    static func blocking<T: Sendable>(_ work: @escaping @Sendable () async -> T) -> T {
+        let box = Box<T>()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached { box.value = await work(); done.signal() }
+        done.wait()
+        return box.value!
     }
 
     static func listCommand(_ args: inout [String], library: Library) throws {

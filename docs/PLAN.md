@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0013). Steps 0 to 3 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid). Next: Step 4.
+**Status:** design complete (ADRs 0001–0014). Steps 0 to 5 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2). Next: Step 6.
 
 ## Modules
 
@@ -77,20 +77,22 @@ Notes from Step 3:
 - CLI: `thumbs generate|path|fetch|clear` and `root fetch-once <id> on|off`.
 
 ## Step 4: Backup and restore (ADR 0005, 0012)
-- [ ] Snapshots via SQLite online backup or `VACUUM INTO`; integrity check
-- [ ] Schedule, plus before migrations and bulk operations
-- [ ] Rotation of dailies and weeklies
-- [ ] Periodic JSON export of tags and rules
-- [ ] Restore (including migrating an older snapshot forward), tested
-- [ ] Portable libraries store backups in the library folder; no extra warnings
-- [ ] `miles-cli restore`
+- [x] Snapshots via SQLite online backup or `VACUUM INTO`; integrity check
+- [x] Schedule, plus before migrations and bulk operations
+- [x] Rotation of dailies and weeklies
+- [x] Periodic JSON export of tags and rules
+- [x] Restore (including migrating an older snapshot forward), tested
+- [x] Portable libraries store backups in the library folder; no extra warnings
+- [x] `miles-cli restore`
 
-## Step 5: Job queue and tagging layers 1–2 (ADR 0003, 0010)
-- [ ] `job` table; throttled, resumable background queue that pauses on battery or load
-- [ ] Layer 1: file metadata tags (`type:`, `year:`, resolution, length)
-- [ ] Layer 2: path and folder rules per root (`tag_rule`)
-- [ ] System-managed namespaces
-- [ ] Re-run a layer without touching user tags
+## Step 5: Job queue and tagging layers 1–2 (ADR 0003, 0010, 0014)
+- [x] `job` table; throttled, resumable background queue that pauses on battery or load
+- [x] Layer 1: file metadata tags (`kind:`, `year:`, `resolution:`, `length:`; ADR 0014 renamed `type:` because ADR 0009 reserves it)
+- [x] Layer 2: path and folder rules per root (`tag_rule`)
+- [x] System-managed namespaces
+- [x] Re-run a layer without touching user tags
+- The app starts the queue when a library opens and queues due work after each scan. CLI: `rule add|list|remove`, `jobs status|run|enqueue|retry|clear-failed|failed|rerun`; `scan` queues due jobs. The queue wiring in the app is build-checked only; the logic is tested in `JobQueueTests` and `TaggingLayerTests`.
+- Not in this step: metadata-pattern rules (a rule matches folders only), UI for rules and for the review queue (Step 8).
 
 ## Step 6: Operations journal, undo, exact duplicates (ADR 0004, 0007)
 - [ ] `operation` table; write before every action; undo from it
