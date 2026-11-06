@@ -173,6 +173,7 @@ final class GridItem: NSCollectionViewItem {
     private let badge = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private var fileID: Int64 = -1
+    private var loadTask: Task<Void, Never>?
 
     override func loadView() {
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 150, height: 176))
@@ -223,7 +224,8 @@ final class GridItem: NSCollectionViewItem {
         }
         let id = file.id
         let canRender = !notOnDisk && file.kind == "image"
-        Task { [weak self] in
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
             func read() async -> Data? { await Task.detached(priority: .utility) { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value }
             var data = await read()
             // No cached thumbnail yet: make it now, for this cell, instead of waiting for a pass over everything.
@@ -258,6 +260,9 @@ final class GridItem: NSCollectionViewItem {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        // Scrolled out of view: drop the pending thumbnail request.
+        loadTask?.cancel()
+        loadTask = nil
         fileID = -1
     }
 }

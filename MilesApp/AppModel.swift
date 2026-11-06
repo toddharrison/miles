@@ -70,9 +70,6 @@ final class AppModel {
     // Background work
     private(set) var waitingJobs: [JobGroup: Int] = [:]
     private(set) var queuePaused = false
-    /// (done, total) while the background pass makes thumbnails for files not yet shown. Does not block scanning.
-    private(set) var thumbnailFill: (done: Int, total: Int)?
-    private var thumbnailFillTask: Task<Void, Never>?
     private var thumbnailGenerator: ThumbnailGenerator?
     private var statusPoll: Task<Void, Never>?
     let quickLook = QuickLook()
@@ -144,7 +141,6 @@ final class AppModel {
             reloadTags()
             runScheduledBackup()
             startJobQueue(for: opened)
-            fillThumbnails()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -269,9 +265,6 @@ final class AppModel {
         statusPoll?.cancel()
         statusPoll = nil
         quickLook.close()
-        thumbnailFillTask?.cancel()
-        thumbnailFillTask = nil
-        thumbnailFill = nil
         thumbnailGenerator = nil
         jobQueue?.stop()
         jobQueue = nil
@@ -408,30 +401,10 @@ final class AppModel {
             thumbnailGeneration += 1
             reloadRoots()
             refresh()
-            fillThumbnails()
         }
     }
 
-    /// Thumbnails are made when a cell comes into view (`ensureThumbnail`); this covers the rest in the background
-    /// so files nobody scrolled to are done before iCloud might evict them. Scanning does not wait for it.
-    private func fillThumbnails() {
-        guard let generator = thumbnailGenerator, thumbnailFillTask == nil else { return }
-        let library = library
-        thumbnailFillTask = Task {
-            let report: @Sendable (Int, Int) -> Void = { done, total in
-                guard done % 25 == 0 || done == total else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, self.thumbnailFillTask != nil else { return }
-                    self.thumbnailFill = done == total ? nil : (done, total)
-                }
-            }
-            _ = try? await generator.fillMissing(progress: report)
-            guard self.library === library else { return }
-            thumbnailFill = nil
-            thumbnailFillTask = nil
-        }
-    }
-
+    /// Thumbnails are made only when a cell comes into view; nothing is made in advance.
     /// Makes one file's thumbnail now, for a cell that is on screen. True when a thumbnail file exists afterwards.
     func ensureThumbnail(_ fileID: Int64) async -> Bool {
         guard let generator = thumbnailGenerator else { return false }

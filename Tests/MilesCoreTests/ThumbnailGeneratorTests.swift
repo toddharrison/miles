@@ -50,15 +50,19 @@ struct ThumbnailGeneratorTests {
         #expect(renderer.paths.isEmpty)
     }
 
-    @Test func fillMissingCoversLocalImagesAndSkipsEvictedOnes() async throws {
+    @Test func aCancelledRequestRendersNothing() async throws {
         let env = try ScannerTests.Env(); defer { env.close() }
         env.fs.addFile("/Fake/photos/a.jpg", size: 10)
-        env.fs.addFile("/Fake/photos/b.jpg", size: 10)
-        env.fs.addFile("/Fake/photos/cloud.jpg", size: 10, dataless: true)
         try env.scan()
+        let id = try #require(try env.library.files().first?.id)
         let renderer = CountingRenderer()
         let generator = ThumbnailGenerator(service: ThumbnailService(library: env.library, fileSystem: env.fs, renderer: renderer))
-        #expect(try await generator.fillMissing() == 2)
-        #expect(try await generator.fillMissing() == 0, "a second pass finds nothing left to do")
+        let task = Task { () -> ThumbnailOutcome in
+            await Task.yield()
+            return await generator.ensure(fileID: id)
+        }
+        task.cancel()
+        #expect(await task.value == .failed("cancelled"))
+        #expect(renderer.paths.isEmpty)
     }
 }
