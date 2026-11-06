@@ -99,6 +99,8 @@ final class AppModel {
         let fs = fileSystem
         Task.detached {
             _ = try? library.recoverInterruptedOperations(fileSystem: fs)
+            // Originals past the retention the user set go to the Trash. Only Miles' own holdback copies are touched.
+            _ = try? library.releaseExpiredHoldbacks(fileSystem: fs)
             _ = try? library.enqueueDueJobs()
             queue.start()
         }

@@ -10,7 +10,7 @@ public struct Exclusions: Equatable, Sendable {
     ]
 
     /// Junk the system writes everywhere. Skipped silently.
-    static let ignoredFileNames: Set<String> = [".ds_store", ".localized", ".fseventsd", ".spotlight-v100", ".trashes", ".temporaryitems"]
+    static let ignoredFileNames: Set<String> = [".ds_store", ".localized", ".fseventsd", ".spotlight-v100", ".trashes", ".temporaryitems", ".miles-holdback"]
 
     /// User exclusions. An entry with no `/` matches any path component by name (case-insensitive);
     /// an entry with `/` matches that path relative to the root, and everything under it.

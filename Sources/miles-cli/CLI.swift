@@ -1,8 +1,8 @@
 import Foundation
 import MilesCore
 
-/// `miles-cli`: scan, query and resolve duplicates without the UI. Only `dup resolve --apply` and `ops undo` change a
-/// user's files, and both go through the operation journal.
+/// `miles-cli`: scan, query and resolve duplicates without the UI. `dup resolve`, `standardize`, `mv`, `rename` (each only with `--apply`), `holdback release|expire` and
+/// `ops undo` change a user's files, all through the operation journal.
 enum CLI {
     static let usage = """
     usage: miles-cli [--library <dir>] [--take-over-lock] <command>
@@ -16,6 +16,10 @@ enum CLI {
       root remove <id>                        stop indexing; forgets its records, touches no files
       root exclude <id> <pattern>...          replace the root's exclusions (a name, or a path/relative/to/root)
       root fetch-once <id> on|off             per-root: download evicted images once to build thumbnails (off by default)
+      root manage <id> on|off                 opt a root in to (or out of) managed mode: move, rename, standardize. Off by default
+      root standardize <id> [--max-size 5mb] [--max-edge 3000] [--min-quality 0.6] [--strip-location] | off | show
+                                              the root's image rule (JPEG and HEIC only). Nothing runs until 'standardize'
+      root holdback <id> [--days 30] [--release-immediately on|off]   how long originals wait, or send them to the Trash at once
       root list
       scan [--root <id>]                      scan one or all roots
       list [--root <id>] [--missing] [--limit <n>]
@@ -45,6 +49,11 @@ enum CLI {
                                               preview what the action would do; --apply does it. You choose the action and the copy to keep every time.
                                               trash: extras go to the Trash. clone: extras become APFS clones of the kept copy (same volume only)
       ops list [--batch <id>] | ops undo [<batch>|latest]   the journal of changes Miles made to files, and undoing them
+      standardize <root-id> [--apply]         preview re-encoding a managed root's images to its rule (old and new size, dimensions,
+                                              quality); --apply does it. Originals wait in the holdback and 'ops undo' restores them
+      mv <file-id> <path-in-root> [--root <id>] [--apply] | rename <file-id> <new-name> [--apply]   managed roots only; preview first
+      holdback list | holdback release [--batch <id>] [--op <id>] | holdback expire   originals waiting after standardization; release
+                                              sends them to the Trash early (ends 'ops undo' for them), expire does so for those past retention
       search save <name> <query> [--replace] | search list | search run <name> | search delete <name>
 
     Query syntax: a space is AND, 'or', -exclude, (groups), foo*, ns:value, ~literal (no alias or implication),
@@ -92,7 +101,7 @@ enum CLI {
         case "restore":
             try restoreCommand(&args, option: libraryOption, fs: fs, registry: registry, takeOver: takeOver)
 
-        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs", "dup", "ops":
+        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs", "dup", "ops", "standardize", "mv", "rename", "holdback":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
             // A crash or quit part-way through a file operation is settled from the disk before anything else runs.
@@ -110,6 +119,9 @@ enum CLI {
             case "jobs": try jobsCommand(&args, library: library, fs: fs)
             case "dup": try dupCommand(&args, library: library, fs: fs)
             case "ops": try opsCommand(&args, library: library, fs: fs)
+            case "standardize": try standardizeCommand(&args, library: library, fs: fs)
+            case "mv", "rename": try moveCommand(command, &args, library: library, fs: fs)
+            case "holdback": try holdbackCommand(&args, library: library, fs: fs)
             default: try listCommand(&args, library: library)
             }
 
@@ -217,7 +229,8 @@ enum CLI {
     // MARK: root
 
     static func rootCommand(_ args: inout [String], library: Library, fs: FileSystem, registry: LibraryRegistry) throws {
-        guard let sub = args.first else { throw Failure(message: "usage: root add|remove|exclude|list") }
+        guard let sub = args.first else { throw Failure(message: "usage: root add|remove|exclude|manage|standardize|holdback|list") }
+        if ["manage", "standardize", "holdback"].contains(sub) { try rootManagedCommand(&args, library: library, fs: fs); return }
         args.removeFirst()
         switch sub {
         case "add":
@@ -240,7 +253,7 @@ enum CLI {
         case "list":
             for root in try library.roots() {
                 let path = root.location.resolve(fileSystem: fs) ?? "(drive not mounted)"
-                let excluded = (root.exclusions.isEmpty ? "" : "  excludes: \(root.exclusions.joined(separator: ", "))") + (root.fetchOnce ? "  fetch-once" : "")
+                let excluded = (root.exclusions.isEmpty ? "" : "  excludes: \(root.exclusions.joined(separator: ", "))") + (root.fetchOnce ? "  fetch-once" : "") + printRoot(root)
                 print("\(root.id)\t\(root.mode)\t\(try library.fileCount(rootID: root.id)) files\t\(path)\(excluded)")
             }
         default:

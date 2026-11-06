@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -247,6 +247,32 @@ enum LibraryDatabase {
                 t.primaryKey(["groupID", "fileID"])
             }
             try db.create(index: "dup_member_on_file", on: "dup_member", columns: ["fileID"])
+        }
+
+        // Managed roots: standardization rule, holdback settings, file links (ADR 0004, 0006).
+        migrator.registerMigration("v6-managed-standardization") { db in
+            try db.alter(table: "root") { t in
+                t.add(column: "standardization", .text)                                  // JSON rule; null = none (opt-in)
+                t.add(column: "holdbackDays", .integer).notNull().defaults(to: 30)
+                t.add(column: "releaseImmediately", .boolean).notNull().defaults(to: false)
+            }
+            try db.alter(table: "operation") { t in
+                t.add(column: "resultHash", .blob)          // resize: full hash of the derivative, checked before undo
+                t.add(column: "holdbackUntil", .datetime)   // resize: when the original goes to the Trash
+            }
+            // The original of a resize lives in the holdback, outside any root. The file row stays with the
+            // derivative (so tags carry over); this records what it was made from.
+            try db.create(table: "file_link") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("derivedFileID", .integer).notNull().references("file", onDelete: .cascade)
+                t.column("originalHash", .blob).notNull()
+                t.column("originalSize", .integer).notNull()
+                t.column("kind", .text).notNull().check { $0 == "resize" }
+                t.column("operationID", .integer).references("operation", onDelete: .setNull)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(index: "file_link_on_derived", on: "file_link", columns: ["derivedFileID"])
+            try db.create(index: "file_link_on_original", on: "file_link", columns: ["originalHash"])
         }
 
         return migrator

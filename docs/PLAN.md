@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0014). Steps 0 to 6 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates). Next: Step 7.
+**Status:** design complete (ADRs 0001–0014). Steps 0 to 7 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates; managed roots and image standardization). Next: Step 8.
 
 ## Modules
 
@@ -114,12 +114,22 @@ Notes from Step 6:
 - CLI: `dup scan|list|show|resolve`, `ops list|undo`. Real-disk check: trash and clone with undo run against temp files on APFS, restoring the original inodes. The app is build-checked only.
 
 ## Step 7: Managed roots and image standardization (ADR 0004, 0006)
-- [ ] Opt-in managed mode per root; move and rename with preview, journal, undo
-- [ ] Standardization rules: max size, max long edge, quality floor, metadata policy
-- [ ] JPEG and HEIC re-encode; skip RAW, animated, already-compliant files
-- [ ] Per-volume holdback; 30-day default retention; early or immediate release to Trash
-- [ ] `file_link` between original and derivative; tags carry over; excluded from duplicate reports
-- [ ] Idempotent re-runs
+- [x] Opt-in managed mode per root; move and rename with preview, journal, undo
+- [x] Standardization rules: max size, max long edge, quality floor, metadata policy
+- [x] JPEG and HEIC re-encode; skip RAW, animated, already-compliant files
+- [x] Per-volume holdback; 30-day default retention; early or immediate release to Trash
+- [x] `file_link` between original and derivative; tags carry over; excluded from duplicate reports
+- [x] Idempotent re-runs
+
+Notes from Step 7:
+- Migration v6 (schema version 6): `root.standardization` (JSON rule), `root.holdbackDays` (30), `root.releaseImmediately`; `operation.resultHash` and `operation.holdbackUntil`; `file_link`.
+- Managed mode is `root manage <id> on|off`, per root only. Move and rename (`planMoves`, `planRename`, `applyMoves`) work only between managed roots on one volume, refuse paths that escape the root, hit an exclusion or an app-owned package, or whose destination exists, and check each file again before it moves. New folders stay if a move is undone. Case-only renames are refused (the destination "exists" on a case-insensitive volume).
+- Standardization (`planStandardization`, `applyStandardization`) re-encodes in place: the previewed content hash is re-checked, the new file is written into the holdback, the original is renamed into the holdback, then the new file is renamed into place; a failure at either rename puts the original back. The quality ladder runs from 0.85 down to the floor and stops at the first fit. A file that cannot meet the rule above the floor, or would not get smaller, is skipped with the reason. Only JPEG and HEIC are re-encoded; a format change (PNG to JPEG) is not built, and the metadata policy is preserve by default with `--strip-location` dropping GPS data from files that are re-encoded. A file that already complies is never rewritten to strip location.
+- The file row stays with the derivative (same id, so tags, thumbnails' keys and saved state carry over); `file_link` records the original's hash and size. Exact duplicate groups need equal hashes, which a derivative never has, so an original and its resize never group; `areLinked` is there for the Step 8 near-duplicate pass.
+- The holdback is `<mount>/.miles-holdback/<library id>/<batch>/` on a drive, and `~/Library/Application Support/Miles/Holdback/<library id>/<batch>/` for the boot volume, always the file's own volume so no copy is needed. The scanner ignores `.miles-holdback`. Holdback is not backed up (ADR 0006).
+- Release sends the original to the Trash and sets `releasedAt` (`holdbackPath` then holds the Trash location). `releaseExpiredHoldbacks` does this for originals past `holdbackUntil`, and the app runs it when a library opens. A root with `releaseImmediately` does it right after each run, and the preview says so. `undoBatch` skips released operations and says the Trash is the last recovery point.
+- Undo of a resize sends the resized file to the Trash (never deleted) and only if it is still as Miles left it, then renames the original back and restores the row's hashes. Crash recovery settles pending and undoing moves and resizes from the disk.
+- CLI: `root manage|standardize|holdback`, `standardize <root> [--apply]`, `mv`, `rename`, `holdback list|release|expire`. Real-disk check: a 12.7 MB JPEG made from a system HEIC was re-encoded to 1000 px and 140 KB, then undone (the resized copy went to the real Trash) and renamed and undone. The app only runs the expiry on open; the review UI for plans comes with Step 8's UI work.
 
 ## Step 8: AI (ADR 0003, 0007, 0010)
 - [ ] Verify Foundation Models availability and API on macOS 27

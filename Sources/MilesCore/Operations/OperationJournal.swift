@@ -28,6 +28,9 @@ public struct OperationRecord: Equatable, Identifiable, Sendable {
     public var createdAt: Date
     public var undoneAt: Date?
     public var releasedAt: Date?
+    /// Resize only: the derivative's hash, and when the original leaves the holdback for the Trash.
+    public var resultHash: Data? = nil
+    public var holdbackUntil: Date? = nil
 }
 
 /// A summary of one user action, for "undo the last thing".
@@ -62,7 +65,8 @@ extension Library {
         OperationRecord(id: row["id"], batch: row["batch"], kind: OperationKind(rawValue: row["kind"]) ?? .move, fileID: row["fileID"],
                         fromPath: row["fromPath"], toPath: row["toPath"], holdbackPath: row["holdbackPath"],
                         originalHash: row["originalHash"], state: OperationState(rawValue: row["state"]) ?? .failed,
-                        error: row["error"], createdAt: row["createdAt"], undoneAt: row["undoneAt"], releasedAt: row["releasedAt"])
+                        error: row["error"], createdAt: row["createdAt"], undoneAt: row["undoneAt"], releasedAt: row["releasedAt"],
+                        resultHash: row["resultHash"], holdbackUntil: row["holdbackUntil"])
     }
 
     // MARK: Reading the journal
@@ -79,7 +83,7 @@ extension Library {
         try database.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT batch, MIN(createdAt) AS createdAt, COUNT(*) AS n,
-                       SUM(state = 'done') AS done, SUM(state = 'undone') AS undone
+                       SUM(state = 'done' AND releasedAt IS NULL) AS done, SUM(state = 'undone') AS undone
                 FROM operation GROUP BY batch ORDER BY MAX(id) DESC LIMIT ?
                 """, arguments: [limit]).map {
                 OperationBatchInfo(batch: $0["batch"], createdAt: $0["createdAt"], operations: $0["n"], done: $0["done"], undone: $0["undone"])
@@ -89,21 +93,21 @@ extension Library {
 
     // MARK: Writing the journal
 
-    private func insertOperation(kind: OperationKind, batch: String, fileID: Int64, from: String, to: String,
-                                 hash: Data?, now: Date) throws -> Int64 {
+    func insertOperation(kind: OperationKind, batch: String, fileID: Int64, from: String, to: String,
+                         hash: Data?, holdbackPath: String? = nil, holdbackUntil: Date? = nil, now: Date) throws -> Int64 {
         try database.write { db in
             try db.execute(sql: """
-                INSERT INTO operation (batch, kind, fileID, fromPath, toPath, originalHash, state, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-                """, arguments: [batch, kind.rawValue, fileID, from, to, hash, now])
+                INSERT INTO operation (batch, kind, fileID, fromPath, toPath, originalHash, holdbackPath, holdbackUntil, state, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                """, arguments: [batch, kind.rawValue, fileID, from, to, hash, holdbackPath, holdbackUntil, now])
             return db.lastInsertedRowID
         }
     }
 
-    private func finishOperation(_ id: Int64, state: OperationState, toPath: String? = nil, error: String? = nil) throws {
+    func finishOperation(_ id: Int64, state: OperationState, toPath: String? = nil, resultHash: Data? = nil, error: String? = nil) throws {
         try database.write { db in
-            try db.execute(sql: "UPDATE operation SET state = ?, toPath = COALESCE(?, toPath), error = ? WHERE id = ?",
-                           arguments: [state.rawValue, toPath, error, id])
+            try db.execute(sql: "UPDATE operation SET state = ?, toPath = COALESCE(?, toPath), resultHash = COALESCE(?, resultHash), error = ? WHERE id = ?",
+                           arguments: [state.rawValue, toPath, resultHash, error, id])
         }
     }
 
@@ -121,13 +125,13 @@ extension Library {
     /// A file may only be acted on while it is still the file that was indexed: local (never downloaded to be
     /// checked), at its path, with the indexed size and time, and with the full hash it was grouped by.
     /// The hash is read again, so a file edited since it was hashed is refused.
-    func verifiedFile(id: Int64, fileSystem fs: FileSystem) throws -> VerifiedFile {
+    func verifiedFile(id: Int64, expectedHash: Data? = nil, fileSystem fs: FileSystem) throws -> VerifiedFile {
         guard let row = try database.read({ db in
             try Row.fetchOne(db, sql: "SELECT size, modified, icloudStatus, missingSince, fullHash, volumeID, fileID FROM file WHERE id = ?", arguments: [id])
         }), let file = try file(id: id) else { throw OperationError.refused("file \(id) is not indexed") }
         guard file.missingSince == nil else { throw OperationError.refused("\(file.relativePath) is missing") }
         guard (row["icloudStatus"] as String) == "local" else { throw OperationError.refused("\(file.relativePath) is not downloaded; Miles does not download files to act on them") }
-        guard let hash: Data = row["fullHash"] else { throw OperationError.refused("\(file.relativePath) has no full hash yet") }
+        guard let hash: Data = expectedHash ?? row["fullHash"] else { throw OperationError.refused("\(file.relativePath) has no full hash yet") }
         let path: String
         do { path = try absolutePath(of: file, fileSystem: fs) }
         catch { throw OperationError.refused("the drive holding \(file.relativePath) is not available") }
@@ -201,7 +205,12 @@ extension Library {
     public func undoBatch(_ batch: String, fileSystem fs: FileSystem, now: Date = Date()) throws -> UndoResult {
         var result = UndoResult()
         var touched: [Int64] = []
-        for op in try operations(batch: batch, limit: 10_000).reversed() where op.state == .done {
+        let all = try operations(batch: batch, limit: 10_000).reversed().filter { $0.state == .done }
+        let released = all.filter { $0.releasedAt != nil }.count
+        if released > 0 {
+            result.stoppedBecause = "\(released) original\(released == 1 ? " was" : "s were") already released to the Trash, which is now the last recovery point"
+        }
+        for op in all where op.releasedAt == nil {
             do {
                 try undo(operation: op, fileSystem: fs, now: now)
                 result.undone += 1
@@ -261,8 +270,8 @@ extension Library {
             catch { try? setState(.done, nil); throw OperationError.refused("could not remove the clone at \(op.toPath): \(error.localizedDescription)") }
             try setState(.undone, holdback)
             if let fileID = op.fileID { try syncFileRow(id: fileID, path: op.toPath, fileSystem: fs, now: now) }
-        case .move, .rename, .resize:
-            throw OperationError.refused("\(op.kind.rawValue) operations arrive with managed roots")
+        case .move, .rename: try undoMove(op, fileSystem: fs, now: now)
+        case .resize: try undoResize(op, fileSystem: fs, now: now)
         }
     }
 
@@ -290,6 +299,8 @@ extension Library {
                 else { state = .done; note = nil }
             case (.undoing, .clone):
                 if !fs.exists(op.toPath) { state = .undone; note = nil; settledPath = op.toPath } else { state = .done; note = nil }
+            case (_, .resize): (state, note) = try settleResize(op, fileSystem: fs, now: now)
+            case (_, .move), (_, .rename): (state, note) = try settleMove(op, fileSystem: fs, now: now)
             default: break
             }
             try database.write { db in

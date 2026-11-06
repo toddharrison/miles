@@ -9,6 +9,13 @@ public struct RootRecord: Equatable, Identifiable, Sendable {
     public var exclusions: [String] = []
     /// Opt-in: download evicted images once to build thumbnails (ADR 0011). Off by default.
     public var fetchOnce: Bool = false
+    /// Image standardization rule (ADR 0006). Nil until the user sets one; only a managed root may have one run.
+    public var standardization: StandardizationRule? = nil
+    /// Days an original stays in the holdback after a standardization run (default 30).
+    public var holdbackDays: Int = 30
+    /// Opt-in default: send originals to the Trash right after a run, so there is no holdback.
+    public var releaseImmediately: Bool = false
+    public var isManaged: Bool { mode == "managed" }
 }
 
 extension Library {
@@ -42,10 +49,11 @@ extension Library {
 
     public func roots() throws -> [RootRecord] {
         try database.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions, fetchOnce FROM root ORDER BY id").map {
+            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions, fetchOnce, standardization, holdbackDays, releaseImmediately FROM root ORDER BY id").map {
                 RootRecord(id: $0["id"], location: VolumeLocation(volumeID: $0["volumeID"], relativePath: $0["relativePath"]),
                            mode: $0["mode"], exclusions: Exclusions.decode($0["exclusions"]).userPatterns,
-                           fetchOnce: $0["fetchOnce"])
+                           fetchOnce: $0["fetchOnce"], standardization: StandardizationRule.decode($0["standardization"]),
+                           holdbackDays: $0["holdbackDays"], releaseImmediately: $0["releaseImmediately"])
             }
         }
     }
