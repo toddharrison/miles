@@ -16,9 +16,9 @@ let package = Package(
         // Logic. Must not import SwiftUI or AppKit (enforced by a test).
         .target(name: "MilesCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
         // AI providers behind a protocol; on-device only.
-        .target(name: "MilesAI"),
+        .target(name: "MilesAI", dependencies: ["MilesCore"]),
         .executableTarget(name: "miles-cli", dependencies: ["MilesCore", "MilesAI"]),
-        .testTarget(name: "MilesCoreTests", dependencies: ["MilesCore"]),
-        .testTarget(name: "MilesAITests", dependencies: ["MilesAI"]),
+        .testTarget(name: "MilesCoreTests", dependencies: ["MilesCore", "MilesAI"]),
+        .testTarget(name: "MilesAITests", dependencies: ["MilesAI", "MilesCore"]),
     ]
 )

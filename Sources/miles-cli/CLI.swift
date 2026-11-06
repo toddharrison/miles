@@ -1,4 +1,5 @@
 import Foundation
+import MilesAI
 import MilesCore
 
 /// `miles-cli`: scan, query and resolve duplicates without the UI. `dup resolve`, `standardize`, `mv`, `rename` (each only with `--apply`), `holdback release|expire` and
@@ -41,9 +42,9 @@ enum CLI {
       rule list | rule remove <id>
       jobs status | jobs run [--limit <n>] [--ignore-conditions]   work the background queue (waits on battery or a busy Mac unless told not to)
       jobs enqueue | jobs retry | jobs clear-failed | jobs failed
-      jobs rerun metadata|rules [--root <id>]     redo a tagging layer; user tags and rejected tags are kept
-      dup scan                                queue the hashing that finds exact duplicates (run it with 'jobs run'), then rebuild groups
-      dup list [--all] [--limit <n>]          exact duplicate groups, most wasted space first (--all includes reviewed ones)
+      jobs rerun metadata|rules|ml|llm [--root <id>]     redo a tagging layer; user tags and rejected tags are kept
+      dup scan                                queue the hashing and image fingerprints that find duplicates (run it with 'jobs run'), then rebuild groups
+      dup list [--all] [--limit <n>]          exact and near-duplicate (similar image) groups, most space first (--all includes reviewed ones). Near groups are suggestions: they cannot be resolved
       dup show <group>                        the copies in a group, with a suggestion for which to keep (only a suggestion)
       dup resolve <group> --action trash|clone|keep-all [--keep <file-id>] [--merge-tags] [--apply]
                                               preview what the action would do; --apply does it. You choose the action and the copy to keep every time.
@@ -54,10 +55,15 @@ enum CLI {
       mv <file-id> <path-in-root> [--root <id>] [--apply] | rename <file-id> <new-name> [--apply]   managed roots only; preview first
       holdback list | holdback release [--batch <id>] [--op <id>] | holdback expire   originals waiting after standardization; release
                                               sends them to the Trash early (ends 'ops undo' for them), expire does so for those past retention
+      ai status                               the AI providers, whether each can run now, per-root AI settings and the review backlog
+      root ai <id> [--auto-accept <0-1>|off] [--llm image,text|off]   per root: accept suggestions at or above a confidence; turn layer 4 (LLM) on for file kinds
+      review list [--root <id>] [--min-confidence <0-1>] [--limit <n>]   AI suggestions waiting for you, most confident first
+      review accept <file-id> <tag> | review reject <file-id> <tag> | review accept-all --min-confidence <0-1> [--root <id>]
+      ask [--dry] [--limit <n>] <request>     plain-language search: shows the query the on-device model wrote, then runs it (--dry: only show)
       search save <name> <query> [--replace] | search list | search run <name> | search delete <name>
 
     Query syntax: a space is AND, 'or', -exclude, (groups), foo*, ns:value, ~literal (no alias or implication),
-    "text in name or path", and filters type: ext: size: date: root: path: dup:exact tagged source: status:
+    "text in name or path", and filters type: ext: size: date: root: path: dup:exact dup:near tagged source: status:
     missing: sort:. Example: (cat or dog) -ns:old size:>5mb sort:-date
 
     The library is --library, or $MILES_LIBRARY, or the default registered library.
@@ -101,7 +107,7 @@ enum CLI {
         case "restore":
             try restoreCommand(&args, option: libraryOption, fs: fs, registry: registry, takeOver: takeOver)
 
-        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs", "dup", "ops", "standardize", "mv", "rename", "holdback":
+        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs", "dup", "ops", "standardize", "mv", "rename", "holdback", "ai", "review", "ask":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
             // A crash or quit part-way through a file operation is settled from the disk before anything else runs.
@@ -122,6 +128,9 @@ enum CLI {
             case "standardize": try standardizeCommand(&args, library: library, fs: fs)
             case "mv", "rename": try moveCommand(command, &args, library: library, fs: fs)
             case "holdback": try holdbackCommand(&args, library: library, fs: fs)
+            case "ai": try aiCommand(&args, library: library)
+            case "review": try reviewCommand(&args, library: library)
+            case "ask": try askCommand(&args, library: library)
             default: try listCommand(&args, library: library)
             }
 
@@ -229,8 +238,9 @@ enum CLI {
     // MARK: root
 
     static func rootCommand(_ args: inout [String], library: Library, fs: FileSystem, registry: LibraryRegistry) throws {
-        guard let sub = args.first else { throw Failure(message: "usage: root add|remove|exclude|manage|standardize|holdback|list") }
+        guard let sub = args.first else { throw Failure(message: "usage: root add|remove|exclude|manage|standardize|holdback|ai|list") }
         if ["manage", "standardize", "holdback"].contains(sub) { try rootManagedCommand(&args, library: library, fs: fs); return }
+        if sub == "ai" { try rootAICommand(&args, library: library); return }
         args.removeFirst()
         switch sub {
         case "add":
@@ -281,8 +291,8 @@ enum CLI {
             if r.missingCheckSkipped { line += "\n  too many skipped directories: missing-file check not run" }
             print(line)
         }
-        let queued = try library.enqueueDueJobs()
-        if queued > 0 { print("queued \(queued) tagging and hashing jobs; run them with 'jobs run'") }
+        let queued = try library.enqueueDueJobs(ai: aiVersions())
+        if queued > 0 { print("queued \(queued) tagging, hashing, fingerprint and AI jobs; run them with 'jobs run'") }
     }
 
     // MARK: rules and jobs
@@ -308,7 +318,7 @@ enum CLI {
     }
 
     static func jobsCommand(_ args: inout [String], library: Library, fs: FileSystem) throws {
-        let usage = "usage: jobs status | jobs run [--limit <n>] [--ignore-conditions] | jobs enqueue | jobs retry | jobs clear-failed | jobs failed | jobs rerun metadata|rules [--root <id>]"
+        let usage = "usage: jobs status | jobs run [--limit <n>] [--ignore-conditions] | jobs enqueue | jobs retry | jobs clear-failed | jobs failed | jobs rerun metadata|rules|ml|llm [--root <id>]"
         guard let sub = args.first else { throw Failure(message: usage) }
         args.removeFirst()
         switch sub {
@@ -316,7 +326,7 @@ enum CLI {
             let c = try library.jobCounts()
             print("\(c.queued) queued, \(c.running) running, \(c.failed) failed")
         case "enqueue":
-            print("queued \(try library.enqueueDueJobs()) jobs")
+            print("queued \(try library.enqueueDueJobs(ai: aiVersions())) jobs")
         case "run":
             let ignore = takeFlag("--ignore-conditions", from: &args)
             let limit = try take("--limit", from: &args).map { value -> Int in
@@ -324,8 +334,8 @@ enum CLI {
                 return n
             }
             try library.recoverInterruptedJobs()
-            let queue = JobQueue(library: library, handlers: library.taggingHandlers(fileSystem: fs),
-                                 conditions: ignore ? NoConditions() : SystemConditions())
+            let handlers = blocking { await AIPipeline().allHandlers(library: library, fileSystem: fs) }
+            let queue = JobQueue(library: library, handlers: handlers, conditions: ignore ? NoConditions() : SystemConditions())
             let summary = blocking { await queue.runUntilIdle(limit: limit) }
             print("ran \(summary.processed) jobs, \(summary.failed) failed")
             switch summary.end {
@@ -347,9 +357,16 @@ enum CLI {
             switch args.first {
             case "metadata": layer = .metadata
             case "rules": layer = .pathRules
+            case "ml": layer = .systemML
+            case "llm": layer = .llm
             default: throw Failure(message: usage)
             }
-            print("queued \(try library.rerunLayer(layer, rootID: only)) jobs")
+            if layer.isAI {
+                guard let version = aiVersions()[layer] else { throw Failure(message: "no usable provider for layer \(layer.rawValue) (see 'ai status')") }
+                print("queued \(try library.rerunAILayer(layer, version: version, rootID: only)) jobs; pending suggestions are replaced, accepted and rejected ones stay")
+            } else {
+                print("queued \(try library.rerunLayer(layer, rootID: only)) jobs")
+            }
         default:
             throw Failure(message: usage)
         }
@@ -370,9 +387,10 @@ enum CLI {
         args.removeFirst()
         switch sub {
         case "scan":
-            let queued = try library.enqueueHashingJobs()
+            let queued = try library.enqueueHashingJobs() + library.enqueueFingerprintJobs()
             try library.refreshDuplicateGroups()
-            print("queued \(queued) hashing jobs\(queued > 0 ? "; run them with 'jobs run', then 'dup list'" : "")")
+            try library.refreshNearDuplicateGroups()
+            print("queued \(queued) hashing and fingerprint jobs\(queued > 0 ? "; run them with 'jobs run', then 'dup list'" : "")")
         case "list":
             let all = takeFlag("--all", from: &args)
             let limit = try take("--limit", from: &args).map { value -> Int in
@@ -380,9 +398,11 @@ enum CLI {
                 return n
             }
             try library.refreshDuplicateGroups()
+            try library.refreshNearDuplicateGroups()
             let groups = try library.duplicateGroups(includeReviewed: all, limit: limit)
             for g in groups {
-                print("group \(g.id)\t\(g.members.count) copies\t\(megabytes(g.extraBytes)) extra\t\(g.status.rawValue)\t\(g.members.first?.relativePath ?? "")")
+                let similarity = g.kind == .near ? "\tsimilar (suggestion only)" : ""
+                print("group \(g.id)\t\(g.kind.rawValue)\t\(g.members.count) copies\t\(megabytes(g.extraBytes)) extra\t\(g.status.rawValue)\(similarity)\t\(g.members.first?.relativePath ?? "")")
             }
             if groups.isEmpty { print("no duplicate groups (hashing is staged: 'dup scan', then 'jobs run')") }
         case "show":

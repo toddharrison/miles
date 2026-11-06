@@ -152,7 +152,8 @@ public enum QueryCompiler {
             case .path(let text): return "lower(file.relativePath) LIKE \(bind("%" + QueryCompiler.likePattern(text, wildcards: false) + "%")) ESCAPE '\\'"
             case .dup(.exact):
                 return "(file.fullHash IS NOT NULL AND EXISTS (SELECT 1 FROM file o WHERE o.fullHash = file.fullHash AND o.id <> file.id AND o.missingSince IS NULL))"
-            case .dup(.near): throw QueryError("dup:near needs image fingerprints, which Miles does not compute yet")
+            case .dup(.near):
+                return "EXISTS (SELECT 1 FROM dup_member m JOIN dup_group g ON g.id = m.groupID WHERE m.fileID = file.id AND g.kind = 'near')"
             case .tagged(let yes):
                 return "\(yes ? "" : "NOT ")EXISTS (SELECT 1 FROM file_tag ft WHERE ft.fileID = file.id AND ft.status = 'accepted')"
             case .source(let s): return fileTagExists(source: s, status: nil)

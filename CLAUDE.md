@@ -6,7 +6,7 @@ Native macOS booru-style file manager (tags, search, duplicates), Swift/SwiftUI,
 1. [README.md](README.md): overview and the decisions table
 2. [docs/PLAN.md](docs/PLAN.md): the checklist and current status. Work from here.
 3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): invariants every change must satisfy
-4. [docs/decisions/](docs/decisions/): ADRs 0001–0014, the authority on any decision
+4. [docs/decisions/](docs/decisions/): ADRs 0001–0015, the authority on any decision
 5. [docs/DATA-MODEL.md](docs/DATA-MODEL.md) and [docs/SECURITY.md](docs/SECURITY.md) as needed
 
 ## Rules
@@ -23,7 +23,7 @@ Layout: root `Package.swift` (modules `MilesCore`, `MilesAI`, executable `miles-
 
 - Build the package: `swift build`
 - Test the package (Swift Testing): `swift test`; one suite: `swift test --filter LibraryTests`
-- CLI: `swift run miles-cli <command>`: `version`, `library create|list|forget`, `root add|remove|exclude|manage|standardize|holdback|list`, `scan`, `list`, `query`, `tag add|remove|show|list|alias|unalias|imply|unimply`, `thumbs generate|path|fetch|clear`, `root fetch-once`, `search save|list|run|delete`, `rule add|list|remove`, `jobs status|run|enqueue|retry|clear-failed|failed|rerun`, `dup scan|list|show|resolve`, `ops list|undo`, `backup now|list`, `standardize <root> [--apply]`, `mv`, `rename`, `holdback list|release|expire`, `restore list|<snapshot|latest> [--apply]` (see `miles-cli help`). `library create` registers the library in the app's preferences (`app.miles.Miles`), so use `library forget` after trying it. `dup resolve --apply` really trashes or clones files (the real Trash), so try it on a temp folder, then `ops undo`. `standardize --apply` writes a holdback under `~/Library/Application Support/Miles/Holdback` and undoing it sends the resized copy to the Trash
+- CLI: `swift run miles-cli <command>`: `version`, `library create|list|forget`, `root add|remove|exclude|manage|standardize|holdback|list`, `scan`, `list`, `query`, `tag add|remove|show|list|alias|unalias|imply|unimply`, `thumbs generate|path|fetch|clear`, `root fetch-once`, `search save|list|run|delete`, `rule add|list|remove`, `jobs status|run|enqueue|retry|clear-failed|failed|rerun`, `dup scan|list|show|resolve`, `ai status`, `review list|accept|reject|accept-all`, `ask`, `root ai`, `ops list|undo`, `backup now|list`, `standardize <root> [--apply]`, `mv`, `rename`, `holdback list|release|expire`, `restore list|<snapshot|latest> [--apply]` (see `miles-cli help`). `library create` registers the library in the app's preferences (`app.miles.Miles`), so use `library forget` after trying it. `dup resolve --apply` really trashes or clones files (the real Trash), so try it on a temp folder, then `ops undo`. `standardize --apply` writes a holdback under `~/Library/Application Support/Miles/Holdback` and undoing it sends the resized copy to the Trash
 - Million-file scale test: `MILES_SCALE_TESTS=1 swift test --filter ScaleTests/millionFiles`
 - Build the app: `xcodebuild -project Miles.xcodeproj -scheme MilesApp -configuration Debug CODE_SIGNING_ALLOWED=NO build`
 - Tests use `FakeFileSystem` (`Tests/MilesCoreTests/Support`; `SyntheticFileSystem` for scale) for volumes, iCloud placeholders and moves, and real temp directories (`TempDir`) where SQLite needs a real file. Hold the `LibraryLock` or `Library` you acquire: dropping it releases the lock.

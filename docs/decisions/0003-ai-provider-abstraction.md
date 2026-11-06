@@ -1,6 +1,6 @@
 # 0003. Local AI behind a provider protocol
 
-- Status: accepted
+- Status: accepted, amended by [0015](0015-ai-layers-and-fingerprints.md) (the system model takes images; the cloud model is excluded)
 - Date: 2026-11-06
 
 ## Context

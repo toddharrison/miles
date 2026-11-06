@@ -1,15 +1,26 @@
 import Foundation
 import GRDB
 
-/// The automated tagging layers (ADR 0010). Layers 3 and 4 (AI) arrive in Step 8.
+/// The automated tagging layers (ADR 0010). Layers 1 and 2 are deterministic and write accepted `rule` tags; layers 3 and 4
+/// are on-device AI and write `ai` suggestions into the review queue.
 public enum TagLayer: Int, Sendable, CaseIterable {
     case metadata = 1
     case pathRules = 2
+    /// Vision and NaturalLanguage: image classification, text in images, language and entities.
+    case systemML = 3
+    /// LLM/VLM providers. Off by default for every root (ADR 0010).
+    case llm = 4
+
+    /// Layers that need no model: queued by `enqueueStaleTaggingJobs`. The AI layers are queued by `enqueueStaleAIJobs`.
+    public static let deterministic: [TagLayer] = [.metadata, .pathRules]
+    public var isAI: Bool { rawValue >= 3 }
 
     public var jobKind: JobKind {
         switch self {
         case .metadata: .tagMetadata
         case .pathRules: .tagPathRules
+        case .systemML: .tagSystemML
+        case .llm: .tagLLM
         }
     }
 
@@ -18,6 +29,8 @@ public enum TagLayer: Int, Sendable, CaseIterable {
         switch self {
         case .metadata: "metadata"
         case .pathRules: "path-rules"
+        case .systemML: "system-ml"
+        case .llm: "llm"
         }
     }
 
@@ -79,10 +92,10 @@ extension Library {
     /// or became local after an incomplete run, or the layer's version or the root's rules changed.
     /// Missing files are skipped. Returns how many jobs were added.
     @discardableResult
-    public func enqueueStaleTaggingJobs(layers: [TagLayer] = TagLayer.allCases, rootID: Int64? = nil, now: Date = Date()) throws -> Int {
+    public func enqueueStaleTaggingJobs(layers: [TagLayer] = TagLayer.deterministic, rootID: Int64? = nil, now: Date = Date()) throws -> Int {
         try database.write { db in
             var added = 0
-            for layer in layers {
+            for layer in layers where !layer.isAI {
                 let version = layer == .metadata ? String(MetadataTagger.version) : "ro.ruleRevision"
                 // Layer 2 only has work once a root has had a rule; before that, nothing could be out of date.
                 let neverRun = layer == .pathRules ? "(r.fileID IS NULL AND ro.ruleRevision > 0)" : "r.fileID IS NULL"

@@ -335,7 +335,7 @@ struct SearchTests {
 
     @Test func unsupportedFiltersFailClearly() throws {
         let e = try Env(Self.sample)
-        for q in ["dup:near", "created:2024", "sort:created", "cat created:2024"] {
+        for q in ["created:2024", "sort:created", "cat created:2024"] {
             #expect(throws: QueryError.self, "\(q)") { try e.library.search(q) }
         }
     }

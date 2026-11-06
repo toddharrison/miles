@@ -1,6 +1,6 @@
 # 0007. Duplicate detection and resolution
 
-- Status: accepted
+- Status: accepted, amended by [0015](0015-ai-layers-and-fingerprints.md) (difference hash, 6-bit threshold)
 - Date: 2026-11-06
 - Amends: [0001](0001-storage-model.md) (unmanaged roots are read-only except for explicit user-initiated actions)
 

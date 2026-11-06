@@ -61,17 +61,24 @@ public struct PathRuleJobHandler: JobHandler {
 }
 
 extension Library {
-    /// The handlers for every job kind this build knows, for `JobQueue`: tagging layers and duplicate hashing.
+    /// The handlers for the job kinds MilesCore knows, for `JobQueue`: tagging layers 1 and 2, duplicate hashing and fingerprints. AI jobs are handled by `MilesAI`.
     public func taggingHandlers(fileSystem: FileSystem, probe: any MetadataProbe = SystemMetadataProbe()) -> [JobKind: any JobHandler] {
         [.tagMetadata: MetadataJobHandler(library: self, fileSystem: fileSystem, probe: probe),
          .tagPathRules: PathRuleJobHandler(library: self),
          .hashPartial: HashJobHandler(library: self, fileSystem: fileSystem, stage: .partial),
-         .hashFull: HashJobHandler(library: self, fileSystem: fileSystem, stage: .full)]
+         .hashFull: HashJobHandler(library: self, fileSystem: fileSystem, stage: .full),
+         .fingerprint: FingerprintJobHandler(library: self, fileSystem: fileSystem)]
     }
 
-    /// Queues everything that is due after a scan: tagging layers and duplicate hashing. Returns the number of jobs added.
+    /// Queues everything that is due after a scan: tagging layers 1 and 2, duplicate hashing and image fingerprints.
+    /// `ai` maps an AI layer to the version of its current providers (see `MilesAI`); layers not listed are not queued,
+    /// which is how a layer with no provider available stays quiet. Returns the number of jobs added.
     @discardableResult
-    public func enqueueDueJobs(rootID: Int64? = nil) throws -> Int {
-        try enqueueStaleTaggingJobs(rootID: rootID) + enqueueHashingJobs(rootID: rootID)
+    public func enqueueDueJobs(rootID: Int64? = nil, ai: [TagLayer: Int] = [:]) throws -> Int {
+        var added = try enqueueStaleTaggingJobs(rootID: rootID) + enqueueHashingJobs(rootID: rootID) + enqueueFingerprintJobs(rootID: rootID)
+        for (layer, version) in ai.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            added += try enqueueStaleAIJobs(layer: layer, version: version, rootID: rootID)
+        }
+        return added
     }
 }

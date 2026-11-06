@@ -1,4 +1,5 @@
 import AppKit
+import MilesAI
 import MilesCore
 import Observation
 
@@ -12,6 +13,8 @@ final class AppModel {
     private(set) var library: Library?
     /// Background tagging (layers 1 and 2). Throttled; waits on battery power or a busy Mac (ADR 0003).
     private var jobQueue: JobQueue?
+    /// Looks for new AI suggestions while the background queue works.
+    private var suggestionPoll: Task<Void, Never>?
     private(set) var libraryName: String?
     private(set) var libraries: [LibraryRecord] = []
     private(set) var roots: [RootRecord] = []
@@ -20,6 +23,14 @@ final class AppModel {
     /// Bumped whenever thumbnails may have changed, so the grid drops its in-memory images.
     private(set) var thumbnailGeneration = 0
     private(set) var status: String?
+    /// On-device AI providers (ADR 0003, 0015). Which are usable is decided when the queue starts.
+    let ai = AIPipeline()
+    /// AI suggestions waiting for the user (ADR 0010).
+    private(set) var suggestionCount = 0
+    private(set) var suggestions: [Suggestion] = []
+    /// What the on-device model wrote for the last plain-language search, shown for the user to check before it runs (ADR 0015).
+    var translation: QueryTranslation?
+    private(set) var translating = false
     /// A fetch-once batch that is large enough to need the user's approval (ADR 0011).
     var pendingFetch: FetchPlan?
     var errorMessage: String?
@@ -94,19 +105,36 @@ final class AppModel {
 
     /// Queues whatever tagging is due, then works through it in the background.
     private func startJobQueue(for library: Library) {
-        let queue = JobQueue(library: library, handlers: library.taggingHandlers(fileSystem: fileSystem))
-        jobQueue = queue
         let fs = fileSystem
-        Task.detached {
-            _ = try? library.recoverInterruptedOperations(fileSystem: fs)
-            // Originals past the retention the user set go to the Trash. Only Miles' own holdback copies are touched.
-            _ = try? library.releaseExpiredHoldbacks(fileSystem: fs)
-            _ = try? library.enqueueDueJobs()
-            queue.start()
+        let ai = ai
+        Task {
+            // Only layers with a usable provider get handlers and jobs; layer 4 also needs a root that turned it on.
+            let handlers = await ai.allHandlers(library: library, fileSystem: fs)
+            let versions = await ai.layerVersions()
+            guard self.library === library else { return }
+            let queue = JobQueue(library: library, handlers: handlers)
+            jobQueue = queue
+            Task.detached {
+                _ = try? library.recoverInterruptedOperations(fileSystem: fs)
+                // Originals past the retention the user set go to the Trash. Only Miles' own holdback copies are touched.
+                _ = try? library.releaseExpiredHoldbacks(fileSystem: fs)
+                _ = try? library.enqueueDueJobs(ai: versions)
+                queue.start()
+            }
+        }
+        reloadSuggestions()
+        suggestionPoll?.cancel()
+        suggestionPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                self?.reloadSuggestions()
+            }
         }
     }
 
     func closeLibrary() {
+        suggestionPoll?.cancel()
+        suggestionPoll = nil
         jobQueue?.stop()
         jobQueue = nil
         try? library?.close()
@@ -114,6 +142,9 @@ final class AppModel {
         roots = []
         files = []
         totalFiles = 0
+        suggestions = []
+        suggestionCount = 0
+        translation = nil
     }
 
     // MARK: Roots
@@ -157,6 +188,26 @@ final class AppModel {
         }
     }
 
+    /// Layer 4 (LLM/VLM) is off by default; this turns it on for images and text in one root, or off again (ADR 0010).
+    func setLayer4(_ enabled: Bool, root id: Int64) {
+        do {
+            try library?.setLayer4Kinds(enabled ? [.image, .text] : [], forRoot: id)
+            reloadRoots()
+            if enabled { queueAIWork() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func setAutoAccept(_ threshold: Double?, root id: Int64) {
+        do {
+            try library?.setAutoAcceptThreshold(threshold, forRoot: id)
+            reloadRoots()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func reloadRoots() {
         roots = (try? library?.roots()) ?? []
         libraries = registry.libraries
@@ -171,12 +222,14 @@ final class AppModel {
         status = "Scanning…"
         let fs = fileSystem
         let ids = roots.map(\.id)
+        let ai = ai
         Task {
+            let versions = await ai.layerVersions()
             let outcome = await Task.detached { () -> (pending: FetchPlan?, error: String?) in
                 var pending: FetchPlan?
                 do {
                     for id in ids { try library.scan(rootID: id, fileSystem: fs) }
-                    try library.enqueueDueJobs()
+                    try library.enqueueDueJobs(ai: versions)
                     let service = ThumbnailService(library: library, fileSystem: fs)
                     _ = try service.generateMissing()
                     for root in try library.roots() where root.fetchOnce {
@@ -213,6 +266,82 @@ final class AppModel {
             errorMessage = error
             thumbnailGeneration += 1
         }
+    }
+
+    // MARK: AI suggestions and plain-language search
+
+    /// Queues AI work that is due (for example after layer 4 was turned on for a root). The queue picks it up.
+    private func queueAIWork() {
+        guard let library else { return }
+        let ai = ai
+        Task {
+            let versions = await ai.layerVersions()
+            await Task.detached { _ = try? library.enqueueDueJobs(ai: versions) }.value
+        }
+    }
+
+    func reloadSuggestions() {
+        guard let library else { return }
+        Task {
+            let result = await Task.detached { () -> ([Suggestion], Int)? in
+                guard let list = try? library.reviewQueue(limit: 500), let count = try? library.suggestionCount() else { return nil }
+                return (list, count)
+            }.value
+            guard self.library === library, let (list, count) = result else { return }
+            suggestions = list
+            suggestionCount = count
+        }
+    }
+
+    func decide(_ suggestion: Suggestion, accept: Bool) {
+        guard let library else { return }
+        do {
+            if accept { try library.acceptSuggestion(fileID: suggestion.fileID, tag: suggestion.tag) }
+            else { try library.rejectSuggestion(fileID: suggestion.fileID, tag: suggestion.tag) }
+            suggestions.removeAll { $0.id == suggestion.id }
+            suggestionCount = max(suggestionCount - 1, 0)
+            if accept { refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+            reloadSuggestions()
+        }
+    }
+
+    func acceptAll(minConfidence: Double) {
+        do {
+            _ = try library?.acceptSuggestions(minConfidence: minConfidence)
+            reloadSuggestions()
+            refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Asks the on-device model for a query. Nothing runs until the user accepts the query shown (`runTranslation`).
+    func translate(_ request: String) {
+        guard let library, !request.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        translating = true
+        translation = nil
+        let ai = ai
+        Task {
+            let result = await Task.detached { () -> Result<QueryTranslation, Error> in
+                do { return .success(try await QueryTranslator(provider: ai.translator).translate(request, in: library)) }
+                catch { return .failure(error) }
+            }.value
+            guard self.library === library else { return }
+            translating = false
+            switch result {
+            case .success(let t): translation = t
+            case .failure(let error): errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Runs the translated query (as the user may have edited it) in the search box.
+    func runTranslation(_ edited: String) {
+        query = edited
+        translation = nil
+        refresh()
     }
 
     // MARK: Search

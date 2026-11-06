@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0014). Steps 0 to 7 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates; managed roots and image standardization). Next: Step 8.
+**Status:** design complete (ADRs 0001–0014). Steps 0 to 8 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates; managed roots and image standardization; AI layers, review queue, near-duplicates and plain-language search). Next: Step 9.
 
 ## Modules
 
@@ -56,7 +56,7 @@ Index a folder, browse it as a thumbnail grid, search by tag. Nothing in it can 
 - [x] `miles-cli query`
 
 Notes from Step 2:
-- `created:`, `sort:created` and `dup:near` parse but fail with a clear error: the `file` table has no creation date yet, and fingerprints arrive with Step 8. Add a creation-date column (scanner and `FileSystem` change, with a migration) when `created:` is wanted.
+- `created:`, `sort:created` and `dup:near` parse but fail with a clear error: the `file` table has no creation date yet, and near-duplicate fingerprints came with Step 8 (`dup:near` now works). Add a creation-date column (scanner and `FileSystem` change, with a migration) when `created:` is wanted.
 - `dup:exact` works from `file.fullHash`, so it finds files only once the Step 6 hashing pipeline has filled hashes (it ignores hard links and size 0 no better than the groups do: use `miles-cli dup list` for the real groups).
 - A bare `tagged` is the filter (`-tagged` finds untagged files), so a flat tag named `tagged` is refused.
 - Million-file scale test after the FTS triggers: about 43 s first scan and 8 s rescan (debug build).
@@ -131,14 +131,25 @@ Notes from Step 7:
 - Undo of a resize sends the resized file to the Trash (never deleted) and only if it is still as Miles left it, then renames the original back and restores the row's hashes. Crash recovery settles pending and undoing moves and resizes from the disk.
 - CLI: `root manage|standardize|holdback`, `standardize <root> [--apply]`, `mv`, `rename`, `holdback list|release|expire`. Real-disk check: a 12.7 MB JPEG made from a system HEIC was re-encoded to 1000 px and 140 KB, then undone (the resized copy went to the real Trash) and renamed and undone. The app only runs the expiry on open; the review UI for plans comes with Step 8's UI work.
 
-## Step 8: AI (ADR 0003, 0007, 0010)
-- [ ] Verify Foundation Models availability and API on macOS 27
-- [ ] Provider protocol; Foundation Models, Vision and NaturalLanguage providers
-- [ ] Layer 3 suggestions into the review queue; optional auto-accept threshold
-- [ ] Review queue UI; rejected suggestions stay rejected; provider and model recorded
-- [ ] `image_fingerprint`; perceptual-hash near-duplicate groups (suggestions only)
-- [ ] Layer 4 (LLM/VLM), off by default per root and per file kind
-- [ ] Natural-language query translation, showing the generated query first
+## Step 8: AI (ADR 0003, 0007, 0010, 0015)
+- [x] Verify Foundation Models availability and API on macOS 27
+- [x] Provider protocol; Foundation Models, Vision and NaturalLanguage providers
+- [x] Layer 3 suggestions into the review queue; optional auto-accept threshold
+- [x] Review queue UI; rejected suggestions stay rejected; provider and model recorded
+- [x] `image_fingerprint`; perceptual-hash near-duplicate groups (suggestions only)
+- [x] Layer 4 (LLM/VLM), off by default per root and per file kind
+- [x] Natural-language query translation, showing the generated query first
+
+Notes from Step 8:
+- ADR 0015 records the decisions. Migration v7 (schema version 7) adds `root.autoAcceptThreshold`, `root.layer4Kinds` and `image_fingerprint`.
+- Foundation Models on macOS 27 (checked against the SDK and on this Mac, where `SystemLanguageModel.default` is available): the system model reports a `vision` capability and takes images as `Attachment(imageURL:)`, so ADR 0003's "text-only" no longer holds and layer 4 captions images directly. The same framework has `PrivateCloudComputeLanguageModel`, which is cloud-hosted: Miles never uses it. `@Generable` structured output works for tags and for queries. Unavailable states (`deviceNotEligible`, `appleIntelligenceNotEnabled`, `modelNotReady`) are reported by `ai status` and the layer or translation is skipped, not failed.
+- `MilesAI` now depends on `MilesCore` (storage, queue and the review queue stay in `MilesCore`; the providers and the job handler are in `MilesAI`). `AIPipeline` is what the app and CLI use: it lists providers, picks the usable ones, and builds handlers and the per-layer version for `enqueueDueJobs(ai:)`. A layer with no usable provider gets no handler and no jobs.
+- Real run on a temp library (a HEIC, its JPEG and a 400 px resize, and a text file): Vision gave `subject:` tags (confidence about 0.3 for these photos), NaturalLanguage gave `language:en`, `person:alice`, `place:paris`, `org:apple`, Foundation Models gave `color:`, `shape:`, `pattern:` tags for images, and the three pictures formed one near-duplicate group. Vision confidences are low for abstract pictures, so a high auto-accept threshold will accept little from layer 3.
+- The model writes imperfect queries (it confuses `dup:exact` with `dup:near` now and then). The instructions carry the grammar, today's date and the user's vocabulary, one retry feeds the parse error back, and the query is shown first (CLI `ask` prints it before running and `--dry` stops there; the app shows it in an editable field).
+- Near-duplicates: 64-bit difference hash, 6-bit threshold, banded buckets to avoid all-pairs comparison. Weak against crops and rotation. Worst case for very many distinct but similar hashes in one bucket is still quadratic in that bucket. Near groups cannot be resolved; `dup:near` finds their files.
+- App: a review sheet (accept, reject, accept all at or above a confidence), an Ask sheet, and per-root menu items for layer 4 and the auto-accept threshold. The app is build-checked only; the logic is tested in `AITests` (fake providers, fake fingerprints, generated images for the real hash).
+- CLI: `ai status`, `review list|accept|reject|accept-all`, `ask`, `root ai`, `jobs rerun ml|llm`; `scan`, `jobs enqueue` and `jobs run` include the AI layers; `dup scan` and `dup list` include near groups.
+- Not in this step: OCR text is not stored or searched (only `content:text` is tagged), no embeddings or semantic search (deferred by ADR 0003), no UI for duplicate groups beyond `dup:near` search, no MLX or Ollama provider.
 
 ## Step 9: Portable library polish (ADR 0012)
 - [ ] Drive-absent handling and reconnect

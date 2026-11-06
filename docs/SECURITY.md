@@ -12,7 +12,8 @@ Miles reads and sometimes changes a user's personal files, so the main risk is d
 
 ## Privacy
 - No file content, file name or metadata leaves the device. No cloud AI provider (ADR 0003).
-- Any new provider must run on-device, or it must not be added without a new ADR.
+- Any new provider must run on-device, or it must not be added without a new ADR. Apple's `PrivateCloudComputeLanguageModel` is cloud-hosted and is never used (ADR 0015); only `SystemLanguageModel` is.
+- Natural-language search sends the user's request and their tag vocabulary to the on-device model only, and the generated query is shown before it runs (ADR 0015).
 - Logs must not contain file contents. Paths should be kept out of any exported diagnostics by default.
 
 ## Integrity

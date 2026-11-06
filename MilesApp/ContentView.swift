@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: AppModel
+    @State private var showingReview = false
+    @State private var showingAsk = false
 
     var body: some View {
         NavigationSplitView {
@@ -12,6 +14,8 @@ struct ContentView: View {
             detail
         }
         .frame(minWidth: 760, minHeight: 480)
+        .sheet(isPresented: $showingReview) { ReviewQueueView(model: model).toolbar { ToolbarItem { Button("Done") { showingReview = false } } } }
+        .sheet(isPresented: $showingAsk) { AskView(model: model) }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: {
@@ -44,6 +48,14 @@ struct ContentView: View {
                         .contextMenu {
                             Toggle("Fetch iCloud files once for thumbnails", isOn: Binding(
                                 get: { root.fetchOnce }, set: { model.setFetchOnce($0, root: root.id) }))
+                            Toggle("Use the on-device language model on images and text (off by default)", isOn: Binding(
+                                get: { !root.layer4Kinds.isEmpty }, set: { model.setLayer4($0, root: root.id) }))
+                            Menu("Accept AI suggestions automatically") {
+                                Button("Never (review every suggestion)") { model.setAutoAccept(nil, root: root.id) }
+                                ForEach([0.95, 0.9, 0.8], id: \.self) { value in
+                                    Button("At or above \(Int(value * 100))%") { model.setAutoAccept(value, root: root.id) }
+                                }
+                            }
                             Divider()
                             Button("Stop Indexing This Folder", role: .destructive) { model.removeRoot(root.id) }
                         }
@@ -104,6 +116,14 @@ struct ContentView: View {
             .searchable(text: $model.query, prompt: "Search: cat or dog, \"text\", type:image, size:>5mb")
             .onSubmit(of: .search) { model.refresh() }
             .toolbar {
+                ToolbarItem {
+                    Button("Ask in Plain Language", systemImage: "sparkles") { showingAsk = true }
+                }
+                ToolbarItem {
+                    Button("Review \(model.suggestionCount) Suggestions", systemImage: "checklist") { showingReview = true }
+                        .badge(model.suggestionCount)
+                        .disabled(model.suggestionCount == 0)
+                }
                 ToolbarItem {
                     Button("Scan Folders", systemImage: "arrow.clockwise") { model.scan() }
                 }

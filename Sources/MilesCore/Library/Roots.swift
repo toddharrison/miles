@@ -15,6 +15,10 @@ public struct RootRecord: Equatable, Identifiable, Sendable {
     public var holdbackDays: Int = 30
     /// Opt-in default: send originals to the Trash right after a run, so there is no holdback.
     public var releaseImmediately: Bool = false
+    /// AI suggestions at or above this confidence are accepted without review (ADR 0010). Nil: all wait in the review queue.
+    public var autoAcceptThreshold: Double? = nil
+    /// File kinds the LLM/VLM layer may run on in this root. Empty (the default) means layer 4 is off here.
+    public var layer4Kinds: Set<FileKind> = []
     public var isManaged: Bool { mode == "managed" }
 }
 
@@ -49,11 +53,12 @@ extension Library {
 
     public func roots() throws -> [RootRecord] {
         try database.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions, fetchOnce, standardization, holdbackDays, releaseImmediately FROM root ORDER BY id").map {
+            try Row.fetchAll(db, sql: "SELECT id, volumeID, relativePath, mode, exclusions, fetchOnce, standardization, holdbackDays, releaseImmediately, autoAcceptThreshold, layer4Kinds FROM root ORDER BY id").map {
                 RootRecord(id: $0["id"], location: VolumeLocation(volumeID: $0["volumeID"], relativePath: $0["relativePath"]),
                            mode: $0["mode"], exclusions: Exclusions.decode($0["exclusions"]).userPatterns,
                            fetchOnce: $0["fetchOnce"], standardization: StandardizationRule.decode($0["standardization"]),
-                           holdbackDays: $0["holdbackDays"], releaseImmediately: $0["releaseImmediately"])
+                           holdbackDays: $0["holdbackDays"], releaseImmediately: $0["releaseImmediately"],
+                           autoAcceptThreshold: $0["autoAcceptThreshold"], layer4Kinds: Self.decodeKinds($0["layer4Kinds"]))
             }
         }
     }
@@ -82,6 +87,31 @@ extension Library {
         let json = Exclusions(userPatterns: patterns).json
         try database.write { db in
             try db.execute(sql: "UPDATE root SET exclusions = ? WHERE id = ?", arguments: [json, rootID])
+            guard db.changesCount == 1 else { throw LibraryError.invalidRoot("root \(rootID)") }
+        }
+    }
+}
+
+extension Library {
+    static func decodeKinds(_ json: String?) -> Set<FileKind> {
+        guard let json, let data = json.data(using: .utf8), let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(names.compactMap(FileKind.init(rawValue:)))
+    }
+
+    /// Sets (or with nil clears) the confidence above which AI suggestions in this root are accepted without review.
+    public func setAutoAcceptThreshold(_ threshold: Double?, forRoot rootID: Int64) throws {
+        if let threshold, !(0...1).contains(threshold) { throw SuggestionError.invalidThreshold(threshold) }
+        try database.write { db in
+            try db.execute(sql: "UPDATE root SET autoAcceptThreshold = ? WHERE id = ?", arguments: [threshold, rootID])
+            guard db.changesCount == 1 else { throw LibraryError.invalidRoot("root \(rootID)") }
+        }
+    }
+
+    /// Chooses which file kinds the LLM/VLM layer may run on in a root. Empty turns layer 4 off there (ADR 0010).
+    public func setLayer4Kinds(_ kinds: Set<FileKind>, forRoot rootID: Int64) throws {
+        let json = String(decoding: try JSONEncoder().encode(kinds.map(\.rawValue).sorted()), as: UTF8.self)
+        try database.write { db in
+            try db.execute(sql: "UPDATE root SET layer4Kinds = ? WHERE id = ?", arguments: [json, rootID])
             guard db.changesCount == 1 else { throw LibraryError.invalidRoot("root \(rootID)") }
         }
     }

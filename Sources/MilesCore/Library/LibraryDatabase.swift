@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -273,6 +273,26 @@ enum LibraryDatabase {
             }
             try db.create(index: "file_link_on_derived", on: "file_link", columns: ["derivedFileID"])
             try db.create(index: "file_link_on_original", on: "file_link", columns: ["originalHash"])
+        }
+
+        // AI suggestions, per-root AI settings and image fingerprints (ADR 0003, 0007, 0010, 0015).
+        migrator.registerMigration("v7-ai-fingerprints") { db in
+            try db.alter(table: "root") { t in
+                // Suggestions at or above this confidence are accepted at once. Null: every suggestion waits for review.
+                t.add(column: "autoAcceptThreshold", .double)
+                // Layer 4 (LLM/VLM) is off by default: a JSON array of the file kinds it may run on in this root.
+                t.add(column: "layer4Kinds", .text).notNull().defaults(to: "[]")
+            }
+            // Perceptual hash (64-bit difference hash, stored as the signed bit pattern) of an image, with the
+            // file version it came from so an edited file is hashed again.
+            try db.create(table: "image_fingerprint") { t in
+                t.primaryKey("fileID", .integer).references("file", onDelete: .cascade)
+                t.column("hash", .integer).notNull()
+                t.column("algorithm", .integer).notNull()
+                t.column("sourceSize", .integer).notNull()
+                t.column("sourceModified", .datetime).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
         }
 
         return migrator

@@ -10,6 +10,12 @@ public struct JobKind: RawRepresentable, Hashable, Sendable {
     public static let tagMetadata = JobKind(rawValue: "tag-metadata")
     /// Layer 2 tags from path rules (ADR 0010).
     public static let tagPathRules = JobKind(rawValue: "tag-path-rules")
+    /// Layer 3 suggestions from Vision and NaturalLanguage (ADR 0010).
+    public static let tagSystemML = JobKind(rawValue: "tag-system-ml")
+    /// Layer 4 suggestions from an LLM/VLM provider (ADR 0010).
+    public static let tagLLM = JobKind(rawValue: "tag-llm")
+    /// Perceptual hash of an image, for near-duplicate groups (ADR 0007).
+    public static let fingerprint = JobKind(rawValue: "fingerprint")
     /// Partial hash of a file that shares its size with another (ADR 0007).
     public static let hashPartial = JobKind(rawValue: "hash-partial")
     /// Full content hash of a file whose partial hash matches another file's (ADR 0007).
