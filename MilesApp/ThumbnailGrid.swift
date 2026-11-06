@@ -9,6 +9,8 @@ struct ThumbnailGrid: NSViewRepresentable {
     var files: [IndexedFile]
     var generation: Int
     var thumbnailPath: (Int64) -> String
+    /// Makes a missing thumbnail when its cell appears. True if one exists afterwards.
+    var ensureThumbnail: (Int64) async -> Bool
     /// File ids selected in the grid. The grid reports the user's changes and shows what the model holds.
     var selection: Set<Int64>
     var onSelect: (Set<Int64>) -> Void
@@ -59,6 +61,7 @@ struct ThumbnailGrid: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let c = context.coordinator
         c.thumbnailPath = thumbnailPath
+        c.ensureThumbnail = ensureThumbnail
         c.onOpen = onOpen
         c.onSelect = onSelect
         c.onOpenSelection = onOpenSelection
@@ -86,6 +89,7 @@ struct ThumbnailGrid: NSViewRepresentable {
         var onQuickLook: () -> Void = {}
         var generation = 0
         var thumbnailPath: (Int64) -> String = { _ in "" }
+        var ensureThumbnail: (Int64) async -> Bool = { _ in false }
         var onOpen: (IndexedFile) -> Void = { _ in }
         weak var collection: NSCollectionView?
         let images = NSCache<NSNumber, NSImage>()
@@ -95,7 +99,7 @@ struct ThumbnailGrid: NSViewRepresentable {
         func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
             let item = collectionView.makeItem(withIdentifier: GridItem.identifier, for: indexPath)
             guard let cell = item as? GridItem, indexPath.item < files.count else { return item }
-            cell.configure(files[indexPath.item], path: thumbnailPath(files[indexPath.item].id), cache: images)
+            cell.configure(files[indexPath.item], path: thumbnailPath(files[indexPath.item].id), cache: images, ensure: ensureThumbnail)
             return cell
         }
 
@@ -206,7 +210,7 @@ final class GridItem: NSCollectionViewItem {
         didSet { view.layer?.backgroundColor = isSelected ? NSColor.selectedContentBackgroundColor.withAlphaComponent(0.35).cgColor : nil }
     }
 
-    func configure(_ file: IndexedFile, path: String, cache: NSCache<NSNumber, NSImage>) {
+    func configure(_ file: IndexedFile, path: String, cache: NSCache<NSNumber, NSImage>, ensure: @escaping (Int64) async -> Bool) {
         fileID = file.id
         label.stringValue = (file.relativePath as NSString).lastPathComponent
         let notOnDisk = file.icloudStatus == "dataless"
@@ -218,8 +222,12 @@ final class GridItem: NSCollectionViewItem {
             return
         }
         let id = file.id
+        let canRender = !notOnDisk && file.kind == "image"
         Task { [weak self] in
-            let data = await Task.detached(priority: .utility) { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value
+            func read() async -> Data? { await Task.detached(priority: .utility) { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value }
+            var data = await read()
+            // No cached thumbnail yet: make it now, for this cell, instead of waiting for a pass over everything.
+            if data == nil, canRender, await ensure(id) { data = await read() }
             guard let data, let image = NSImage(data: data), let self, self.fileID == id else { return }
             cache.setObject(image, forKey: NSNumber(value: id))
             self.show(image)

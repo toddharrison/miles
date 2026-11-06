@@ -177,7 +177,7 @@ struct ContentView: View {
                     Divider()
                 }
                 ThumbnailGrid(files: model.files, generation: model.thumbnailGeneration,
-                              thumbnailPath: { model.thumbnailPath(for: $0) },
+                              thumbnailPath: { model.thumbnailPath(for: $0) }, ensureThumbnail: { await model.ensureThumbnail($0) },
                               selection: model.selectedFileIDs, onSelect: { model.selectedFileIDs = $0 },
                               onOpen: { model.open($0) }, onOpenSelection: { model.openSelection() },
                               onReveal: { model.revealSelection() }, onQuickLook: { model.quickLookSelection() })
@@ -255,6 +255,10 @@ struct ContentView: View {
             }
             Text(model.status ?? summary).foregroundStyle(.secondary).font(.callout)
             Spacer()
+            if let fill = model.thumbnailFill {
+                Text("Making thumbnails: \(fill.done.formatted()) of \(fill.total.formatted())").foregroundStyle(.secondary).font(.callout)
+                ProgressView(value: Double(fill.done), total: Double(max(fill.total, 1))).frame(width: 100)
+            }
             if model.selectedFileIDs.count > 1 {
                 Text("\(model.selectedFileIDs.count.formatted()) selected").foregroundStyle(.secondary).font(.callout)
             }
