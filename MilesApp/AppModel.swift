@@ -96,8 +96,10 @@ final class AppModel {
     private func startJobQueue(for library: Library) {
         let queue = JobQueue(library: library, handlers: library.taggingHandlers(fileSystem: fileSystem))
         jobQueue = queue
+        let fs = fileSystem
         Task.detached {
-            _ = try? library.enqueueStaleTaggingJobs()
+            _ = try? library.recoverInterruptedOperations(fileSystem: fs)
+            _ = try? library.enqueueDueJobs()
             queue.start()
         }
     }
@@ -172,7 +174,7 @@ final class AppModel {
                 var pending: FetchPlan?
                 do {
                     for id in ids { try library.scan(rootID: id, fileSystem: fs) }
-                    try library.enqueueStaleTaggingJobs()
+                    try library.enqueueDueJobs()
                     let service = ThumbnailService(library: library, fileSystem: fs)
                     _ = try service.generateMissing()
                     for root in try library.roots() where root.fetchOnce {

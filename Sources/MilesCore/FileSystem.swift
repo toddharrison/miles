@@ -47,6 +47,17 @@ public enum FileSystemError: Error, Equatable, Sendable {
     case other(String)
 }
 
+extension FileSystemError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notFound(let p): "\(p) was not found"
+        case .alreadyExists(let p): "\(p) already exists"
+        case .notADirectory(let p): "\(p) is not a folder"
+        case .other(let message): message
+        }
+    }
+}
+
 /// All filesystem access in MilesCore goes through this protocol so tests can fake
 /// placeholders, missing drives and moves (ADR 0013).
 ///
@@ -75,8 +86,19 @@ public protocol FileSystem: Sendable {
     /// Downloads an iCloud placeholder and waits until it is local. Only ever called for a user's
     /// explicit action (opening a file) or an approved per-root "fetch once" (ADR 0011).
     func download(at path: String) throws
+    /// Renames or moves `from` to `to` on one volume, keeping the file's identity. Throws `alreadyExists`
+    /// rather than replacing anything. Used to undo a trash; never to overwrite a user's file.
+    func move(from: String, to: String) throws
+    /// Sends a file to the Trash and returns where it now is. The only way Miles removes a user's file (ADR 0001).
+    func trash(at path: String) throws -> String
+    /// Copy-on-write clone (`clonefile`) of `source` at `destination`. Same APFS volume only; throws if the
+    /// destination exists or the volume cannot clone.
+    func clone(from source: String, to destination: String) throws
 }
 
 extension FileSystem {
     public func download(at path: String) throws { throw FileSystemError.other("downloads are not supported by this filesystem") }
+    public func move(from: String, to: String) throws { throw FileSystemError.other("moves are not supported by this filesystem") }
+    public func trash(at path: String) throws -> String { throw FileSystemError.other("the Trash is not supported by this filesystem") }
+    public func clone(from source: String, to destination: String) throws { throw FileSystemError.other("cloning is not supported by this filesystem") }
 }

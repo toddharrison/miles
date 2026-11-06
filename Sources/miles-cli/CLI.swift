@@ -1,7 +1,8 @@
 import Foundation
 import MilesCore
 
-/// `miles-cli`: scan and list without the UI. Reads and indexes only; no command here changes a user's files.
+/// `miles-cli`: scan, query and resolve duplicates without the UI. Only `dup resolve --apply` and `ops undo` change a
+/// user's files, and both go through the operation journal.
 enum CLI {
     static let usage = """
     usage: miles-cli [--library <dir>] [--take-over-lock] <command>
@@ -37,6 +38,13 @@ enum CLI {
       jobs status | jobs run [--limit <n>] [--ignore-conditions]   work the background queue (waits on battery or a busy Mac unless told not to)
       jobs enqueue | jobs retry | jobs clear-failed | jobs failed
       jobs rerun metadata|rules [--root <id>]     redo a tagging layer; user tags and rejected tags are kept
+      dup scan                                queue the hashing that finds exact duplicates (run it with 'jobs run'), then rebuild groups
+      dup list [--all] [--limit <n>]          exact duplicate groups, most wasted space first (--all includes reviewed ones)
+      dup show <group>                        the copies in a group, with a suggestion for which to keep (only a suggestion)
+      dup resolve <group> --action trash|clone|keep-all [--keep <file-id>] [--merge-tags] [--apply]
+                                              preview what the action would do; --apply does it. You choose the action and the copy to keep every time.
+                                              trash: extras go to the Trash. clone: extras become APFS clones of the kept copy (same volume only)
+      ops list [--batch <id>] | ops undo [<batch>|latest]   the journal of changes Miles made to files, and undoing them
       search save <name> <query> [--replace] | search list | search run <name> | search delete <name>
 
     Query syntax: a space is AND, 'or', -exclude, (groups), foo*, ns:value, ~literal (no alias or implication),
@@ -84,9 +92,12 @@ enum CLI {
         case "restore":
             try restoreCommand(&args, option: libraryOption, fs: fs, registry: registry, takeOver: takeOver)
 
-        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs":
+        case "root", "scan", "list", "query", "tag", "search", "thumbs", "backup", "rule", "jobs", "dup", "ops":
             let library = try openLibrary(libraryOption, fs: fs, registry: registry, takeOver: takeOver)
             defer { try? library.close() }
+            // A crash or quit part-way through a file operation is settled from the disk before anything else runs.
+            let settled = try library.recoverInterruptedOperations(fileSystem: fs)
+            if settled > 0 { print("settled \(settled) interrupted operations; see 'ops list'") }
             switch command {
             case "root": try rootCommand(&args, library: library, fs: fs, registry: registry)
             case "scan": try scanCommand(&args, library: library, fs: fs)
@@ -97,6 +108,8 @@ enum CLI {
             case "backup": try backupCommand(&args, library: library)
             case "rule": try ruleCommand(&args, library: library)
             case "jobs": try jobsCommand(&args, library: library, fs: fs)
+            case "dup": try dupCommand(&args, library: library, fs: fs)
+            case "ops": try opsCommand(&args, library: library, fs: fs)
             default: try listCommand(&args, library: library)
             }
 
@@ -255,8 +268,8 @@ enum CLI {
             if r.missingCheckSkipped { line += "\n  too many skipped directories: missing-file check not run" }
             print(line)
         }
-        let queued = try library.enqueueStaleTaggingJobs()
-        if queued > 0 { print("queued \(queued) tagging jobs; run them with 'jobs run'") }
+        let queued = try library.enqueueDueJobs()
+        if queued > 0 { print("queued \(queued) tagging and hashing jobs; run them with 'jobs run'") }
     }
 
     // MARK: rules and jobs
@@ -290,7 +303,7 @@ enum CLI {
             let c = try library.jobCounts()
             print("\(c.queued) queued, \(c.running) running, \(c.failed) failed")
         case "enqueue":
-            print("queued \(try library.enqueueStaleTaggingJobs()) jobs")
+            print("queued \(try library.enqueueDueJobs()) jobs")
         case "run":
             let ignore = takeFlag("--ignore-conditions", from: &args)
             let limit = try take("--limit", from: &args).map { value -> Int in
@@ -324,6 +337,100 @@ enum CLI {
             default: throw Failure(message: usage)
             }
             print("queued \(try library.rerunLayer(layer, rootID: only)) jobs")
+        default:
+            throw Failure(message: usage)
+        }
+    }
+
+    // MARK: duplicates and the journal
+
+    static func groupID(_ value: String?) throws -> Int64 {
+        guard let value, let id = Int64(value) else { throw Failure(message: "expected a duplicate group id (see 'dup list')") }
+        return id
+    }
+
+    static func megabytes(_ bytes: Int64) -> String { String(format: "%.1f MB", Double(bytes) / 1_000_000) }
+
+    static func dupCommand(_ args: inout [String], library: Library, fs: FileSystem) throws {
+        let usage = "usage: dup scan | dup list [--all] [--limit <n>] | dup show <group> | dup resolve <group> --action trash|clone|keep-all [--keep <file-id>] [--merge-tags] [--apply]"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "scan":
+            let queued = try library.enqueueHashingJobs()
+            try library.refreshDuplicateGroups()
+            print("queued \(queued) hashing jobs\(queued > 0 ? "; run them with 'jobs run', then 'dup list'" : "")")
+        case "list":
+            let all = takeFlag("--all", from: &args)
+            let limit = try take("--limit", from: &args).map { value -> Int in
+                guard let n = Int(value), n > 0 else { throw Failure(message: "--limit needs a positive number") }
+                return n
+            }
+            try library.refreshDuplicateGroups()
+            let groups = try library.duplicateGroups(includeReviewed: all, limit: limit)
+            for g in groups {
+                print("group \(g.id)\t\(g.members.count) copies\t\(megabytes(g.extraBytes)) extra\t\(g.status.rawValue)\t\(g.members.first?.relativePath ?? "")")
+            }
+            if groups.isEmpty { print("no duplicate groups (hashing is staged: 'dup scan', then 'jobs run')") }
+        case "show":
+            let id = try groupID(args.first)
+            guard let group = try library.duplicateGroup(id: id) else { throw Failure(message: "no group \(id)") }
+            let suggestion = library.suggestKeep(in: group)
+            print("group \(group.id): \(group.members.count) copies, \(megabytes(group.extraBytes)) in the extra copies, \(group.status.rawValue)")
+            for m in group.members {
+                let paths = (try? library.file(id: m.id)).flatMap { $0 }.flatMap { try? library.absolutePath(of: $0, fileSystem: fs) } ?? m.relativePath
+                print("  file \(m.id)\t\(m.tagCount) tags\t\(m.icloudStatus == "local" ? "" : "not downloaded\t")\(paths)")
+            }
+            if let suggestion { print("suggestion (yours to decide): keep file \(suggestion.fileID), \(suggestion.reason)") }
+        case "resolve":
+            let apply = takeFlag("--apply", from: &args)
+            let merge = takeFlag("--merge-tags", from: &args)
+            guard let actionName = take("--action", from: &args), let action = ResolutionAction(rawValue: actionName) else {
+                throw Failure(message: "choose an action: --action trash|clone|keep-all\n\(usage)")
+            }
+            let keep = try take("--keep", from: &args).map { try fileID($0) }
+            let id = try groupID(args.first)
+            let plan = try library.planResolution(groupID: id, action: action, keep: keep, mergeTags: merge, fileSystem: fs)
+            print("group \(id): \(action.rawValue)\(keep.map { ", keeping file \($0)" } ?? "")")
+            for step in plan.steps { print("  \(step.kind.rawValue) file \(step.fileID): \(step.path)\n      \(step.summary)") }
+            for skip in plan.skipped { print("  skip file \(skip.fileID): \(skip.path): \(skip.reason)") }
+            if !plan.tagsToMerge.isEmpty { print("  tags the kept copy gains: \(plan.tagsToMerge.joined(separator: ", "))") }
+            if action != .keepAll { print("  frees about \(megabytes(plan.bytesFreed)); every file is checked again before it is touched") }
+            guard apply else { print("preview only; add --apply to do it"); return }
+            let outcome = try library.applyResolution(plan, fileSystem: fs)
+            for f in outcome.failures { print("  failed file \(f.fileID): \(f.reason)") }
+            if outcome.tagsMerged > 0 { print("  merged \(outcome.tagsMerged) tags") }
+            if let batch = outcome.batch { print("done: \(outcome.resolvedFileIDs.count) copies; undo with 'ops undo \(batch)'") }
+            else if action == .keepAll { print("group \(id) marked reviewed") }
+            if !outcome.failures.isEmpty { throw Failure(message: "\(outcome.failures.count) copies were not changed") }
+        default:
+            throw Failure(message: usage)
+        }
+    }
+
+    static func opsCommand(_ args: inout [String], library: Library, fs: FileSystem) throws {
+        let usage = "usage: ops list [--batch <id>] | ops undo [<batch>|latest]"
+        guard let sub = args.first else { throw Failure(message: usage) }
+        args.removeFirst()
+        switch sub {
+        case "list":
+            let batch = take("--batch", from: &args)
+            if batch == nil {
+                for b in try library.operationBatches() {
+                    print("\(b.batch)\t\(b.createdAt.formatted(date: .abbreviated, time: .standard))\t\(b.operations) operations\t\(b.done) done, \(b.undone) undone")
+                }
+            } else {
+                for op in try library.operations(batch: batch) {
+                    print("\(op.id)\t\(op.kind.rawValue)\t\(op.state.rawValue)\t\(op.fromPath) -> \(op.toPath)\(op.error.map { "\t(\($0))" } ?? "")")
+                }
+            }
+        case "undo":
+            let result: UndoResult?
+            if let target = args.first, target != "latest" { result = try library.undoBatch(target, fileSystem: fs) }
+            else { result = try library.undoLatestBatch(fileSystem: fs) }
+            guard let result else { print("nothing to undo"); return }
+            print("undone \(result.undone) operations")
+            if let why = result.stoppedBecause { throw Failure(message: "stopped: \(why)") }
         default:
             throw Failure(message: usage)
         }

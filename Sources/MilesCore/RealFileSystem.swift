@@ -82,6 +82,27 @@ public final class RealFileSystem: FileSystem, @unchecked Sendable {
         throw FileSystemError.other("timed out downloading \(path)")
     }
 
+    public func move(from: String, to: String) throws {
+        // RENAME_EXCL: fail if the destination exists, so a move can never replace a user's file.
+        guard renamex_np(from, to, UInt32(RENAME_EXCL)) == 0 else { throw map(errno, errno == EEXIST ? to : from) }
+    }
+
+    public func trash(at path: String) throws -> String {
+        var result: NSURL?
+        do { try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &result) }
+        catch { throw wrap(error, path) }
+        guard let url = result as URL? else { throw FileSystemError.other("\(path): the Trash did not report where the file went") }
+        return url.path
+    }
+
+    public func clone(from source: String, to destination: String) throws {
+        guard clonefile(source, destination, 0) == 0 else {
+            let code = errno
+            if code == ENOTSUP || code == EXDEV { throw FileSystemError.other("\(destination): this volume cannot clone files from the source") }
+            throw map(code, code == EEXIST ? destination : source)
+        }
+    }
+
     public func exists(_ path: String) -> Bool {
         var st = stat()
         return lstat(path, &st) == 0

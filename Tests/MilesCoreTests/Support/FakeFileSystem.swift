@@ -104,7 +104,11 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
 
     // MARK: FileSystem
 
-    func volume(containing path: String) -> VolumeInfo? { lock.withLock { volumeLocked(containing: path) } }
+    /// Set to make `volume(containing:)` behave like `statfs`: only a path that exists has a volume.
+    var volumeNeedsExistingPath = false
+    func volume(containing path: String) -> VolumeInfo? {
+        lock.withLock { volumeNeedsExistingPath && nodes[path] == nil ? nil : volumeLocked(containing: path) }
+    }
 
     func mountedVolume(withID id: String) -> VolumeInfo? {
         lock.withLock { volumes.first { $0.mounted && $0.info.id == id }?.info }
@@ -191,6 +195,50 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
             downloaded.append(path)
             nodes[path]?.meta.isDataless = false
         }
+    }
+
+    /// Where the fake Trash lives. It is on the boot volume.
+    static let trashDirectory = "/Fake-Trash"
+    private var trashCounter = 0
+
+    func move(from: String, to: String) throws {
+        try lock.withLock {
+            guard nodes[from] != nil else { throw FileSystemError.notFound(from) }
+            guard nodes[to] == nil else { throw FileSystemError.alreadyExists(to) }
+            let parent = (to as NSString).deletingLastPathComponent
+            guard nodes[parent] != nil else { throw FileSystemError.notFound(parent) }
+            nodes[to] = nodes.removeValue(forKey: from)
+        }
+    }
+
+    func trash(at path: String) throws -> String {
+        try lock.withLock {
+            guard nodes[path] != nil else { throw FileSystemError.notFound(path) }
+            if nodes[Self.trashDirectory] == nil { nodes[Self.trashDirectory] = Node(data: nil, meta: dirMeta(volume: "BOOT")) }
+            trashCounter += 1
+            let target = "\(Self.trashDirectory)/\(trashCounter)-\((path as NSString).lastPathComponent)"
+            nodes[target] = nodes.removeValue(forKey: path)
+            return target
+        }
+    }
+
+    func clone(from source: String, to destination: String) throws {
+        try lock.withLock {
+            guard let node = nodes[source], let data = node.data else { throw FileSystemError.notFound(source) }
+            guard nodes[destination] == nil else { throw FileSystemError.alreadyExists(destination) }
+            let from = volumeLocked(containing: source), to = volumeLocked(containing: destination)
+            guard from?.id == to?.id, from?.filesystemType == "apfs" else {
+                throw FileSystemError.other("\(destination): this volume cannot clone files from the source")
+            }
+            var meta = node.meta
+            meta.fileID = takeID()
+            nodes[destination] = Node(data: data, meta: meta)
+        }
+    }
+
+    /// Replaces a file's bytes in place (an edit by the user or another app), keeping its file ID.
+    func overwrite(_ path: String, with data: Data, modified: Date) {
+        lock.withLock { nodes[path]?.data = data; nodes[path]?.meta.size = Int64(data.count); nodes[path]?.meta.modified = modified }
     }
 
     func removeMilesOwnedFile(at path: String) throws {

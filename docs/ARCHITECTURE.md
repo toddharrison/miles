@@ -13,7 +13,7 @@ Xcode project plus a local Swift package: `MilesCore` (logic, no SwiftUI or AppK
 - Managed roots are opt-in. Move and rename only through user-approved actions. Image re-encoding only through standardization rules (ADR 0006).
 - Miles never deletes files directly. Removal goes to the Trash.
 - `.photoslibrary` packages and other app-owned libraries are never indexed or modified.
-- Every change to a file is written to the `operation` journal before it runs, and is undoable until its holdback is released.
+- Every change to a file is written to the `operation` journal before it runs, and is undoable until its holdback is released. A file is re-verified (local, unchanged, same content hash) just before Miles acts on it.
 - Indexing and thumbnail generation never download an iCloud file.
 
 **Data (ADR 0002, 0005, 0012)**

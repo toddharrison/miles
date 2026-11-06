@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0014). Steps 0 to 5 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2). Next: Step 6.
+**Status:** design complete (ADRs 0001–0014). Steps 0 to 6 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates). Next: Step 7.
 
 ## Modules
 
@@ -56,8 +56,8 @@ Index a folder, browse it as a thumbnail grid, search by tag. Nothing in it can 
 - [x] `miles-cli query`
 
 Notes from Step 2:
-- `created:`, `sort:created` and `dup:near` parse but fail with a clear error: the `file` table has no creation date yet, and fingerprints arrive with Step 6 and later. Add a creation-date column (scanner and `FileSystem` change, with a migration) when `created:` is wanted.
-- `dup:exact` works from `file.fullHash`, so it finds nothing until the Step 6 hashing pipeline fills hashes.
+- `created:`, `sort:created` and `dup:near` parse but fail with a clear error: the `file` table has no creation date yet, and fingerprints arrive with Step 8. Add a creation-date column (scanner and `FileSystem` change, with a migration) when `created:` is wanted.
+- `dup:exact` works from `file.fullHash`, so it finds files only once the Step 6 hashing pipeline has filled hashes (it ignores hard links and size 0 no better than the groups do: use `miles-cli dup list` for the real groups).
 - A bare `tagged` is the filter (`-tagged` finds untagged files), so a flat tag named `tagged` is refused.
 - Million-file scale test after the FTS triggers: about 43 s first scan and 8 s rescan (debug build).
 
@@ -95,13 +95,23 @@ Notes from Step 3:
 - Not in this step: metadata-pattern rules (a rule matches folders only), UI for rules and for the review queue (Step 8).
 
 ## Step 6: Operations journal, undo, exact duplicates (ADR 0004, 0007)
-- [ ] `operation` table; write before every action; undo from it
-- [ ] Preview model for bulk operations
-- [ ] Hashing pipeline: size, partial hash, full hash, cached, skips placeholders
-- [ ] `dup_group`, `dup_member`; exact duplicate groups
-- [ ] Resolution actions chosen by the user each time: Trash, APFS clone (same volume only), keep all
-- [ ] Tag merge offered during resolution
-- [ ] Unmanaged roots: only explicit user-initiated actions
+- [x] `operation` table; write before every action; undo from it
+- [x] Preview model for bulk operations
+- [x] Hashing pipeline: size, partial hash, full hash, cached, skips placeholders
+- [x] `dup_group`, `dup_member`; exact duplicate groups
+- [x] Resolution actions chosen by the user each time: Trash, APFS clone (same volume only), keep all
+- [x] Tag merge offered during resolution
+- [x] Unmanaged roots: only explicit user-initiated actions
+
+Notes from Step 6:
+- Migration v5 (schema version 5) adds `operation`, `dup_group`, `dup_member`. `image_fingerprint` and `file_link` wait for Steps 8 and 7.
+- `FileSystem` gained `move` (never replaces), `trash` (returns where the item went) and `clone` (`clonefile`). These and the journal are the only way Miles changes a user's file. Only `applyResolution` and `undoBatch` reach them, and `applyResolution` takes a `ResolutionPlan` that only `planResolution` can make, so there is no way to act without a preview.
+- Hashing is staged over two job kinds: `hash-partial` (files that share a size, never size 0, hard links not counted as peers) and `hash-full` (files whose partial hash matches). Whichever file finishes its partial hash last queues the full hashes. `scan` and the app queue them through `enqueueDueJobs`.
+- A clone is journaled as two operations, `trash` of the extra and `clone` onto its path. If the clone fails the trash is undone at once. Undoing a clone sends the clone to the Trash (Miles never deletes) and only if it is still unmodified; undoing a trash never replaces a file that has appeared at the old path.
+- Before it touches a file, apply re-checks it: local, at its path, indexed size and time, and a fresh full hash equal to the recorded one. A bulk apply (more than one file) takes a `pre-bulk` snapshot first.
+- Undoing a resolution does not undo a tag merge (it only added tags). Group ids are not stable across a refresh that drops and recreates a group.
+- Not in this step: UI for duplicates and the journal (Step 8 adds the review UI work; the app only runs `recoverInterruptedOperations` and queues hashing), move and rename operations, holdback and retention (Step 7).
+- CLI: `dup scan|list|show|resolve`, `ops list|undo`. Real-disk check: trash and clone with undo run against temp files on APFS, restoring the original inodes. The app is build-checked only.
 
 ## Step 7: Managed roots and image standardization (ADR 0004, 0006)
 - [ ] Opt-in managed mode per root; move and rename with preview, journal, undo

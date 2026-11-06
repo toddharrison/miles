@@ -5,7 +5,7 @@ import GRDB
 enum LibraryDatabase {
     /// Highest schema version this build understands. Bump with every migration added below,
     /// and add the migration. An older app refuses a database with a higher version (ADR 0012).
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     static let metaSchemaVersionKey = "schema_version"
     static let metaLibraryIDKey = "library_id"
@@ -207,6 +207,46 @@ enum LibraryDatabase {
             // A file has at most one waiting or running job of a kind. Finished jobs are deleted.
             try db.execute(sql: "CREATE UNIQUE INDEX job_one_pending ON job(kind, fileID) WHERE state IN ('queued', 'running')")
             try db.create(index: "job_on_state", on: "job", columns: ["state", "id"])
+        }
+
+        // Operation journal and exact duplicate groups (ADR 0004, 0007).
+        migrator.registerMigration("v5-operations-duplicates") { db in
+            try db.create(table: "operation") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("batch", .text).notNull()          // one user action; undone together, newest first
+                t.column("kind", .text).notNull().check { $0 == "trash" || $0 == "clone" || $0 == "move" || $0 == "rename" || $0 == "resize" }
+                // The row outlives the file record: undo then restores the file on disk and the next scan indexes it again.
+                t.column("fileID", .integer).references("file", onDelete: .setNull)
+                t.column("fromPath", .text).notNull()       // trash: the file; clone: the kept copy that is cloned
+                t.column("toPath", .text).notNull()         // trash: where it went (filled in once known); clone: the new file
+                t.column("holdbackPath", .text)             // where undo put the clone it replaced
+                t.column("originalHash", .blob)             // full hash checked just before the action
+                t.column("state", .text).notNull()
+                    .check { ["pending", "done", "failed", "undoing", "undone"].contains($0) }
+                t.column("error", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.column("undoneAt", .datetime)
+                t.column("releasedAt", .datetime)           // Step 7: holdback released to the Trash
+            }
+            try db.create(index: "operation_on_batch", on: "operation", columns: ["batch", "id"])
+            try db.create(index: "operation_on_state", on: "operation", columns: ["state"])
+
+            try db.create(table: "dup_group") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("kind", .text).notNull().check { $0 == "exact" || $0 == "near" }
+                t.column("contentHash", .blob)              // exact groups: the shared full hash
+                t.column("status", .text).notNull().defaults(to: "open").check { $0 == "open" || $0 == "reviewed" }
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.uniqueKey(["kind", "contentHash"])
+            }
+            try db.create(table: "dup_member") { t in
+                t.column("groupID", .integer).notNull().references("dup_group", onDelete: .cascade)
+                t.column("fileID", .integer).notNull().references("file", onDelete: .cascade)
+                t.column("similarity", .double)
+                t.primaryKey(["groupID", "fileID"])
+            }
+            try db.create(index: "dup_member_on_file", on: "dup_member", columns: ["fileID"])
         }
 
         return migrator

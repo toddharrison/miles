@@ -23,19 +23,19 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **file_layer_run**: per file and layer, the layer's version, the file's size, modified time and path, and whether content was readable, when the layer last ran. Any difference makes the layer due again.
 
 ### Duplicates ([ADR 0007](decisions/0007-duplicate-detection-and-resolution.md))
-- **image_fingerprint**: file, perceptual hash, algorithm version.
-- **dup_group**: kind (`exact` or `near`) and review status.
-- **dup_member**: group, file, similarity.
-- **file_link**: original file, derived file, kind (`resize`). Linked files are never reported as duplicates of each other.
+- **image_fingerprint**: file, perceptual hash, algorithm version. Not built yet (Step 8).
+- **dup_group**: kind (`exact` or `near`), review status (`open` or `reviewed`) and, for exact groups, the shared full hash (unique per kind). Rebuilt from the cached hashes by `refreshDuplicateGroups`, and kept for a hash when its full hash is stored.
+- **dup_member**: group, file, similarity (null for exact).
+- **file_link**: original file, derived file, kind (`resize`). Linked files are never reported as duplicates of each other. Not built yet (Step 7).
 
 ### Operations ([ADR 0004](decisions/0004-managed-root-operations.md))
-- **operation**: batch, kind (`move`, `rename`, `trash`, `resize`, `clone`), file, from and to path, holdback path, original hash, state, created time, undone time, released time.
+- **operation**: batch (one user action, undone together), kind (`move`, `rename`, `trash`, `resize`, `clone`; Step 6 writes `trash` and `clone`), file (set null if the file row is later removed), from and to path (trash: the file and where the Trash put it; clone: the kept copy and the new file), holdback path (where undoing a clone put it), original hash, state (`pending`, `done`, `failed`, `undoing`, `undone`), error, created, undone and released times.
 
 ### Thumbnails ([ADR 0011](decisions/0011-thumbnails.md))
 - **thumbnail**: one row per file whose thumbnails exist on disk, with the file size and modified time they were made from, and the generated time. The images are files in `thumbnails/<pixels>/` in the library folder (128, 256 and 512), named by `file.id`. The rows and files are derived data, rebuildable and excluded from backups.
 
 ### Work
-- **job**: kind, file, state (`queued`, `running`, `failed`), attempts, provider and model, error, not-before time. At most one queued or running job per kind and file. A finished job is deleted.
+- **job**: kind (`tag-metadata`, `tag-path-rules`, `hash-partial`, `hash-full`), file, state (`queued`, `running`, `failed`), attempts, provider and model, error, not-before time. At most one queued or running job per kind and file. A finished job is deleted.
 
 ### Search
 - **file_fts**: FTS5 table over file name, path and accepted tags, with `file.id` as rowid, kept in step by triggers on `file` and `file_tag`. A quoted string in a query matches the name and path columns (the last word as a prefix); the tags column is indexed for later use. Document text is not indexed in v1.
@@ -49,7 +49,9 @@ One database belongs to one **library** ([ADR 0012](decisions/0012-libraries-and
 - **Rejected suggestions are kept.** A `rejected` AI tag is not suggested again for that file. Provider and model are stored so suggestions can be re-run when models change.
 - **Missing files are marked, not deleted.** A file that disappears gets a missing-since date and is removed only after a grace period (30 days by default), since it may be on an unmounted drive or an evicted iCloud file. A root whose drive is unmounted or whose folder is gone is reported unavailable and nothing in it is marked. Files under a directory the scanner could not read (or that is an iCloud placeholder) are left as they were.
 - **Scanning reads metadata only.** Symbolic links, `.DS_Store` and AppleDouble files are not indexed, and other volumes mounted inside a root are not entered. A file whose size, modified time or file ID changed has its hashes cleared. A file seen at its old path again is no longer missing. A new path is matched to an unseen row whose old path is gone by volume and file ID, then by full hash (only when exactly one such row has that hash); the row keeps its identity, so tags survive.
-- **`operation` is the only way Miles changes files.** Every move, rename, trash, resize and clone writes an operation row before it runs, and undo reads from it.
+- **`operation` is the only way Miles changes files.** Every move, rename, trash, resize and clone writes an operation row before it runs, and undo reads from it. An undo writes `undoing` first. A row left `pending` or `undoing` by a crash is settled from the disk when a library opens (`recoverInterruptedOperations`).
+- **Exact duplicates** ([ADR 0007](decisions/0007-duplicate-detection-and-resolution.md)). Job kinds `hash-partial` and `hash-full` fill `file.partialHash` and `file.fullHash`, only for local files (never a download) that still match their indexed size and time. A file with a unique size, or of size 0, is never read; files that are the same file under two names (same volume and file ID) are not each other's duplicates. A partial hash is SHA-256 of the size plus 64 KB each from the start, middle and end; only equal full hashes make a group. A group needs two different files; a changed membership reopens a reviewed group, and undoing a resolution reopens its group.
+- **Resolution** has no default: the user picks the action (`trash`, `clone`, `keep-all`) and the copy to keep each time. Miles may suggest a copy (most tags, shortest path, oldest). A plan is previewed first and re-verified when applied: the file must be local, at its path, with the indexed size and time, and a fresh full hash equal to the recorded one. Copies that cannot be touched (not downloaded, drive absent, a clone across volumes or off APFS) are skipped with a reason and left alone. A clone is `trash` then `clone` of the extra's path; a failed clone undoes the trash at once. Tag merge copies the extras' accepted tags onto the kept copy, skipping tags it already has or rejected; undo does not remove merged tags. More than one file in an apply takes a `pre-bulk` snapshot first.
 - **Hashes live on `file`.** Perceptual fingerprints are separate because they are versioned and optional.
 - **Query semantics** ([ADR 0009](decisions/0009-query-syntax.md)): missing files are hidden unless the query has a `missing:` filter. `source:` and `status:` terms ANDed together describe the same `file_tag` row. `size:` units are decimal (1 kb = 1000 bytes). A `date:` value of `2024`, `2024-05` or `2024-05-31` covers that whole period in the local time zone. `created:` and `dup:near` are not available yet (no creation date or fingerprints indexed).
 - **Thumbnails** are made only for local files, after a live metadata check, and never by downloading. A thumbnail outlives the file's eviction. It is regenerated when the file's size or modified time differs from the recorded ones. Placeholders show a kind icon with a cloud badge. A download happens only when the user opens a file, or in an approved fetch-once batch (over 25 files or 250 MB needs approval).

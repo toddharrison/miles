@@ -10,6 +10,10 @@ public struct JobKind: RawRepresentable, Hashable, Sendable {
     public static let tagMetadata = JobKind(rawValue: "tag-metadata")
     /// Layer 2 tags from path rules (ADR 0010).
     public static let tagPathRules = JobKind(rawValue: "tag-path-rules")
+    /// Partial hash of a file that shares its size with another (ADR 0007).
+    public static let hashPartial = JobKind(rawValue: "hash-partial")
+    /// Full content hash of a file whose partial hash matches another file's (ADR 0007).
+    public static let hashFull = JobKind(rawValue: "hash-full")
 }
 
 public enum JobState: String, Sendable {

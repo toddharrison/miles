@@ -61,9 +61,17 @@ public struct PathRuleJobHandler: JobHandler {
 }
 
 extension Library {
-    /// The handlers for every job kind this build knows, for `JobQueue`.
+    /// The handlers for every job kind this build knows, for `JobQueue`: tagging layers and duplicate hashing.
     public func taggingHandlers(fileSystem: FileSystem, probe: any MetadataProbe = SystemMetadataProbe()) -> [JobKind: any JobHandler] {
         [.tagMetadata: MetadataJobHandler(library: self, fileSystem: fileSystem, probe: probe),
-         .tagPathRules: PathRuleJobHandler(library: self)]
+         .tagPathRules: PathRuleJobHandler(library: self),
+         .hashPartial: HashJobHandler(library: self, fileSystem: fileSystem, stage: .partial),
+         .hashFull: HashJobHandler(library: self, fileSystem: fileSystem, stage: .full)]
+    }
+
+    /// Queues everything that is due after a scan: tagging layers and duplicate hashing. Returns the number of jobs added.
+    @discardableResult
+    public func enqueueDueJobs(rootID: Int64? = nil) throws -> Int {
+        try enqueueStaleTaggingJobs(rootID: rootID) + enqueueHashingJobs(rootID: rootID)
     }
 }
