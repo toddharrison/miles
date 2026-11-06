@@ -99,9 +99,13 @@ public final class ThumbnailService: @unchecked Sendable {
     }
 
     /// Generates thumbnails for local image files that have none (or a stale one). Run after a scan.
-    public func generateMissing(rootID: Int64? = nil, limit: Int? = nil) throws -> ThumbnailBatch {
+    /// `progress` gets (done, total) after each file; it may run on any thread.
+    public func generateMissing(rootID: Int64? = nil, limit: Int? = nil,
+                                progress: (@Sendable (Int, Int) -> Void)? = nil) throws -> ThumbnailBatch {
         var batch = ThumbnailBatch()
-        for id in try library.filesNeedingThumbnails(rootID: rootID, limit: limit) {
+        let ids = try library.filesNeedingThumbnails(rootID: rootID, limit: limit)
+        for (index, id) in ids.enumerated() {
+            progress?(index, ids.count)
             switch generate(fileID: id) {
             case .generated: batch.generated += 1
             case .notLocal: batch.skippedNotLocal += 1

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// The cached sizes (longest edge in pixels). Each is a separate file under `thumbnails/<pixels>/` (ADR 0011).
 public enum ThumbnailSize: Int, CaseIterable, Sendable {
-    case small = 128, medium = 256, large = 512
+    case small = 128, medium = 256
 }
 
 public enum ThumbnailRenderError: Error, Equatable, Sendable {

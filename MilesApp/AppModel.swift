@@ -23,6 +23,8 @@ final class AppModel {
     /// Bumped whenever thumbnails may have changed, so the grid drops its in-memory images.
     private(set) var thumbnailGeneration = 0
     private(set) var status: String?
+    /// Fraction done (0...1) of the current scan step, or nil when the work has no known total.
+    private(set) var progress: Double?
     /// On-device AI providers (ADR 0003, 0015). Which are usable is decided when the queue starts.
     let ai = AIPipeline()
     /// AI suggestions waiting for the user (ADR 0010).
@@ -103,6 +105,7 @@ final class AppModel {
             libraryName = registry.libraries.first { $0.id == id }?.name
             try? registry.setDefault(id)
             selectedRootID = nil
+            opened.removeObsoleteThumbnailSizes()
             reloadRoots()
             refresh()
             runScheduledBackup()
@@ -273,20 +276,36 @@ final class AppModel {
     /// Scans every root, builds thumbnails for local images (never downloading), then runs any
     /// opted-in fetch-once roots. Large fetch batches wait for approval in `pendingFetch`.
     func scan() {
-        guard let library else { return }
+        guard let library, status == nil else { return }
         status = "Scanning…"
         let fs = fileSystem
         let ids = roots.map(\.id)
         let ai = ai
+        progress = nil
+        let report: @Sendable (String, Double?) -> Void = { [weak self] text, fraction in
+            Task { @MainActor in
+                guard let self, self.status != nil else { return }
+                self.status = text
+                self.progress = fraction
+            }
+        }
         Task {
             let versions = await ai.layerVersions()
             let outcome = await Task.detached { () -> (pending: FetchPlan?, error: String?) in
                 var pending: FetchPlan?
                 do {
-                    for id in ids { try library.scan(rootID: id, fileSystem: fs) }
+                    for (n, id) in ids.enumerated() {
+                        let folder = ids.count > 1 ? " (folder \(n + 1) of \(ids.count))" : ""
+                        report("Scanning\(folder)…", nil)
+                        let options = ScanOptions(progress: { count in report("Scanning\(folder): \(count.formatted()) files indexed", nil) })
+                        try library.scan(rootID: id, fileSystem: fs, options: options)
+                    }
+                    report("Queuing background work…", nil)
                     try library.enqueueDueJobs(ai: versions)
                     let service = ThumbnailService(library: library, fileSystem: fs)
-                    _ = try service.generateMissing()
+                    _ = try service.generateMissing(progress: { done, total in
+                        report("Making thumbnails: \(done.formatted()) of \(total.formatted())", total == 0 ? nil : Double(done) / Double(total))
+                    })
                     for root in try library.roots() where root.fetchOnce {
                         do { _ = try service.fetchOnce(rootID: root.id) }
                         catch let ThumbnailError.needsApproval(plan) { pending = pending ?? plan }
@@ -298,6 +317,7 @@ final class AppModel {
             }.value
             guard self.library === library else { return }
             status = nil
+            progress = nil
             errorMessage = outcome.error
             pendingFetch = outcome.pending
             thumbnailGeneration += 1

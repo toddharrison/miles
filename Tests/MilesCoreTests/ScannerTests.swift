@@ -33,6 +33,24 @@ struct ScannerTests {
         }
     }
 
+    @Test func reportsProgressAfterEachBatch() throws {
+        let env = try Env(); defer { env.close() }
+        for i in 0..<5 { env.fs.addFile("/Fake/photos/f\(i).txt", size: 1) }
+        let seen = Locked<[Int]>([])
+        try env.library.scan(rootID: env.rootID, fileSystem: env.fs,
+                             options: ScanOptions(batchSize: 2, progress: { n in seen.withLock { $0.append(n) } }))
+        #expect(seen.withLock { $0 } == [2, 4, 5])
+    }
+
+    @Test func removesObsoleteThumbnailSizesOnly() throws {
+        let env = try Env(); defer { env.close() }
+        let base = env.library.directory + "/thumbnails"
+        for size in ["128", "256", "512"] { try FileManager.default.createDirectory(atPath: base + "/" + size, withIntermediateDirectories: true) }
+        env.library.removeObsoleteThumbnailSizes()
+        let left = try FileManager.default.contentsOfDirectory(atPath: base).sorted()
+        #expect(left == ["128", "256"])
+    }
+
     @Test func indexesFilesWithMetadata() throws {
         let env = try Env(); defer { env.close() }
         let when = Date(timeIntervalSince1970: 1_700_000_000)
@@ -477,4 +495,11 @@ struct RealDiskScannerTests {
         // The scan wrote nothing into the tree.
         #expect(try FileManager.default.contentsOfDirectory(atPath: root).sorted() == [".DS_Store", "Photos.photoslibrary", "link", "loop", "sub"])
     }
+}
+
+private final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ value: T) { self.value = value }
+    func withLock<R>(_ body: (inout T) -> R) -> R { lock.lock(); defer { lock.unlock() }; return body(&value) }
 }

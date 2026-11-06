@@ -124,6 +124,13 @@ struct ContentView: View {
                               thumbnailPath: { model.thumbnailPath(for: $0) }, onOpen: { model.open($0) })
                 Divider()
                 HStack {
+                    if model.status != nil {
+                        if let fraction = model.progress {
+                            ProgressView(value: fraction).frame(width: 140)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
                     Text(model.status ?? summary).foregroundStyle(.secondary).font(.callout)
                     Spacer()
                 }
@@ -142,6 +149,7 @@ struct ContentView: View {
                 }
                 ToolbarItem {
                     Button("Scan Folders", systemImage: "arrow.clockwise") { model.scan() }
+                        .disabled(model.status != nil)
                 }
             }
         }

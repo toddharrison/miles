@@ -16,11 +16,15 @@ public struct ScanOptions: Sendable {
     public var now: @Sendable () -> Date
     /// Rows are written in transactions of this many files.
     public var batchSize: Int
+    /// Called after each batch is written, with the number of files indexed so far in this scan. May run on any thread.
+    public var progress: (@Sendable (Int) -> Void)?
 
-    public init(gracePeriod: TimeInterval = 30 * 24 * 3600, batchSize: Int = 1000, now: @escaping @Sendable () -> Date = { Date() }) {
+    public init(gracePeriod: TimeInterval = 30 * 24 * 3600, batchSize: Int = 1000, now: @escaping @Sendable () -> Date = { Date() },
+                progress: (@Sendable (Int) -> Void)? = nil) {
         self.gracePeriod = gracePeriod
         self.batchSize = batchSize
         self.now = now
+        self.progress = progress
     }
 }
 
@@ -137,6 +141,7 @@ private final class RootScan {
         }
 
         var skipped: [String] = []
+        var filesWritten = 0
         var buffer: [PendingEntry] = []
         let startPath = startRelative.isEmpty ? rootPath : rootPath + "/" + startRelative
 
@@ -145,6 +150,8 @@ private final class RootScan {
             let batch = buffer
             buffer.removeAll(keepingCapacity: true)
             try library.database.write { db in try self.write(batch, in: db) }
+            filesWritten += batch.count
+            options.progress?(filesWritten)
         }
 
         // The starting point (the root, a subtree directory, or a single file) is the first work item.
