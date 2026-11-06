@@ -39,7 +39,9 @@ Miles is a booru-style file management system for Mac, built as a native applica
 | Duplicates | Exact: size, then partial hash, then full hash. Near-duplicate image detection (perceptual hash) in v1, as suggestions only. The user chooses the resolution (Trash, APFS clone, or keep) every time; previewed, journaled, undoable. Unmanaged roots may be changed only by explicit user-initiated actions like this; Miles never acts on them on its own. |
 | Backup | Automatic, Miles' own data only (database, tags/rules export, journal), local only, rotated, with tested restore. Miles does not back up user files. |
 
-Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/).
+| Tag model | Tags are per file (not shared across duplicates; duplicate resolution offers tag merge). Aliases and implications are in the schema from the start; their UI is deferred. v1 search covers file name, path and tags; document text and semantic search are deferred. |
+
+Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/). The conceptual data model is in [docs/DATA-MODEL.md](docs/DATA-MODEL.md).
 
 ## Open questions
 

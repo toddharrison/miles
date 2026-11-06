@@ -29,3 +29,4 @@ What gets easier, what gets harder, and the costs we accept.
 - [0005](0005-backup-of-miles-data.md): Automated backup of Miles' own data
 - [0006](0006-image-standardization.md): Image standardization in managed roots
 - [0007](0007-duplicate-detection-and-resolution.md): Duplicate detection and resolution
+- [0008](0008-tag-model.md): Tag model
