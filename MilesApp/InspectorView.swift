@@ -14,6 +14,9 @@ struct InspectorView: View {
                 ContentUnavailableView("No file selected", systemImage: "tag",
                                        description: Text("Select a file to see and edit its tags. Select several to tag them together."))
             } else {
+                if count == 1, let file = model.selectedFiles.first {
+                    Section { MediaPreview(model: model, file: file) }
+                }
                 Section(header: Text(title(count))) {
                     if count == 1, let file = model.selectedFiles.first { details(file) }
                 }
@@ -32,7 +35,7 @@ struct InspectorView: View {
             }
         }
         .formStyle(.grouped)
-        .inspectorColumnWidth(min: 240, ideal: 280, max: 400)
+        .inspectorColumnWidth(min: 260, ideal: 340, max: 600)
     }
 
     private func title(_ count: Int) -> String {

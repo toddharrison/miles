@@ -40,6 +40,8 @@ final class AppModel {
     private(set) var unavailable: (libraryName: String, availability: LibraryAvailability)?
     /// A lock Miles cannot show to be dead. Opening waits for the user's explicit confirmation.
     var pendingTakeOver: LibraryRecord?
+    /// A library the user asked to delete, waiting for them to choose what happens to its folder.
+    var pendingLibraryDeletion: LibraryRecord?
     /// The library the user wants open; retried when a drive mounts.
     private var wantedLibraryID: UUID?
 
@@ -215,6 +217,33 @@ final class AppModel {
                 self?.reloadSuggestions()
             }
         }
+    }
+
+    /// Deletes a library the user chose. Only Miles' own library folder (index, tags, backups) can go, and only to the
+    /// Trash. Indexed files are never touched. Anything that fails leaves the library registered.
+    func deleteLibrary(_ record: LibraryRecord, moveFolderToTrash: Bool) {
+        pendingLibraryDeletion = nil
+        let wasOpen = library?.id == record.id || wantedLibraryID == record.id
+        if wasOpen {
+            closeLibrary()
+            wantedLibraryID = nil
+            unavailable = nil
+            libraryName = nil
+        }
+        if moveFolderToTrash {
+            guard let path = registry.path(of: record, fileSystem: fileSystem) else {
+                errorMessage = "\(record.name) is on a drive that is not connected, so its folder cannot be moved to the Trash. Connect the drive, or remove it from the list only."
+                return
+            }
+            do { _ = try fileSystem.trash(at: path) }
+            catch {
+                errorMessage = "Could not move \(record.name) to the Trash: \(error.localizedDescription)"
+                return
+            }
+        }
+        registry.unregister(record.id)
+        libraries = registry.libraries
+        if wasOpen, let next = registry.defaultLibraryID { openLibrary(next) }
     }
 
     func retryWanted() {
@@ -676,6 +705,31 @@ final class AppModel {
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Where a file is on disk, for previewing. Nil when it cannot be found. Never downloads.
+    func localURL(for file: IndexedFile) async -> URL? {
+        guard let library else { return nil }
+        let fs = fileSystem
+        return await Task.detached { (try? library.absolutePath(of: file, fileSystem: fs)).map { URL(fileURLWithPath: $0) } }.value
+    }
+
+    /// Downloads one iCloud file because the user asked to preview it (ADR 0011), without opening it in another app.
+    func download(_ file: IndexedFile) {
+        guard let library else { return }
+        status = "Downloading \((file.relativePath as NSString).lastPathComponent)…"
+        let fs = fileSystem
+        Task {
+            let error = await Task.detached { () -> String? in
+                do { _ = try ThumbnailService(library: library, fileSystem: fs).prepareToOpen(fileID: file.id); return nil }
+                catch { return error.localizedDescription }
+            }.value
+            guard self.library === library else { return }
+            status = nil
+            errorMessage = error
+            thumbnailGeneration += 1
+            refresh()
         }
     }
 

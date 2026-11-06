@@ -25,6 +25,15 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .confirmationDialog("Delete \(model.pendingLibraryDeletion?.name ?? "library")?",
+                            isPresented: Binding(get: { model.pendingLibraryDeletion != nil }, set: { if !$0 { model.pendingLibraryDeletion = nil } }),
+                            titleVisibility: .visible, presenting: model.pendingLibraryDeletion) { record in
+            Button("Move Library Folder to Trash", role: .destructive) { model.deleteLibrary(record, moveFolderToTrash: true) }
+            Button("Remove from List Only") { model.deleteLibrary(record, moveFolderToTrash: false) }
+            Button("Cancel", role: .cancel) { model.pendingLibraryDeletion = nil }
+        } message: { _ in
+            Text("Your indexed files are never touched. The library folder holds Miles' index, tags, saved searches and backups. Moving it to the Trash loses them unless you put the folder back. Removing it from the list keeps the folder.")
+        }
         .alert("Library is open elsewhere", isPresented: Binding(get: { model.pendingTakeOver != nil }, set: { if !$0 { model.pendingTakeOver = nil } })) {
             Button("Take Over", role: .destructive) { model.confirmTakeOver() }
             Button("Cancel", role: .cancel) { model.pendingTakeOver = nil }
@@ -86,6 +95,7 @@ struct ContentView: View {
             ToolbarItem {
                 Button("Add Folder", systemImage: "plus") { model.addRoot() }
                     .disabled(model.library == nil)
+                    .help("Index a folder in place. Miles never moves or changes its files")
             }
         }
     }
@@ -112,10 +122,18 @@ struct ContentView: View {
             }
             if !model.libraries.isEmpty { Divider() }
             Button("New Library…") { model.createLibrary() }
+            if !model.libraries.isEmpty {
+                Menu("Delete Library") {
+                    ForEach(model.libraries) { record in
+                        Button(record.name) { model.pendingLibraryDeletion = record }
+                    }
+                }
+            }
         } label: {
             Label(model.libraryName ?? "Choose a library", systemImage: "books.vertical")
         }
         .menuStyle(.borderlessButton)
+        .help("Switch library, create a new one, or delete one")
     }
 
     // MARK: Detail
@@ -185,33 +203,42 @@ struct ContentView: View {
                 ToolbarItemGroup {
                     Button("Open", systemImage: "arrow.up.forward.app") { model.openSelection() }
                         .keyboardShortcut("o").disabled(model.selectedFileIDs.isEmpty)
+                        .help("Open the selected files (⌘O). An iCloud file is downloaded first")
                     Button("Reveal in Finder", systemImage: "folder") { model.revealSelection() }
                         .keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.selectedFileIDs.isEmpty)
+                        .help("Show the selected files in Finder (⇧⌘R)")
                     Button("Quick Look", systemImage: "eye") { model.quickLookSelection() }
                         .keyboardShortcut("y").disabled(model.selectedFileIDs.isEmpty)
+                        .help("Preview the selected files (Space or ⌘Y). Files not downloaded from iCloud are skipped")
                 }
                 ToolbarItem {
                     Button("Save Search", systemImage: "bookmark") { savedName = ""; showingSaveSearch = true }
                         .disabled(model.query.trimmingCharacters(in: .whitespaces).isEmpty || model.queryError != nil)
+                        .help("Save the current search under a name, in the sidebar")
                 }
                 ToolbarItem {
                     Button("Browse Tags", systemImage: "tag") { showingTags = true }
+                        .help("List every tag with its file count; click one to search for it")
                         .popover(isPresented: $showingTags) { TagBrowserView(model: model, isPresented: $showingTags) }
                 }
                 ToolbarItem {
                     Button("Inspector", systemImage: "sidebar.trailing") { showingInspector.toggle() }
+                        .help("Show or hide the tag inspector")
                 }
                 ToolbarItem {
                     Button("Ask in Plain Language", systemImage: "sparkles") { showingAsk = true }
+                        .help("Describe what you want in words; the on-device model writes the search for you to check")
                 }
                 ToolbarItem {
                     Button("Review \(model.suggestionCount) Suggestions", systemImage: "checklist") { showingReview = true }
                         .badge(model.suggestionCount)
                         .disabled(model.suggestionCount == 0)
+                        .help("Accept or reject tags the on-device AI suggested")
                 }
                 ToolbarItem {
                     Button("Scan Folders", systemImage: "arrow.clockwise") { model.scan() }
                         .disabled(model.status != nil)
+                        .help("Look for new, changed and missing files in every folder, then build thumbnails")
                 }
             }
         }
