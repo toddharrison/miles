@@ -1,6 +1,6 @@
 # 0001. Managed and unmanaged directories
 
-- Status: accepted
+- Status: accepted, amended by [0007](0007-duplicate-detection-and-resolution.md) (unmanaged roots may be changed by explicit, user-initiated actions)
 - Date: 2026-11-06
 
 ## Context

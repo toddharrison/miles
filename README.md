@@ -36,6 +36,7 @@ Miles is a booru-style file management system for Mac, built as a native applica
 | Deletion | Miles never deletes files directly; removal goes to the Trash. |
 | Managed-root operations | Any file type (images included) may be moved/renamed, only by explicit or user-approved action, previewed, journaled, and undoable. File contents are not rewritten except by image standardization (below). App-owned libraries (Photos etc.) are excluded. |
 | Image standardization | Opt-in per managed root, images only (JPEG/HEIC first). Rules combine max file size, max long edge, and a quality floor; metadata preserved by default. Previewed, journaled, undoable. Originals held 30 days (configurable) before going to the Trash, or released to the Trash early/immediately at the user's choice. Video is out of scope for now. |
+| Duplicates | Exact: size, then partial hash, then full hash. Near-duplicate image detection (perceptual hash) in v1, as suggestions only. The user chooses the resolution (Trash, APFS clone, or keep) every time; previewed, journaled, undoable. Unmanaged roots may be changed only by explicit user-initiated actions like this; Miles never acts on them on its own. |
 | Backup | Automatic, Miles' own data only (database, tags/rules export, journal), local only, rotated, with tested restore. Miles does not back up user files. |
 
 Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/).
@@ -43,5 +44,4 @@ Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/).
 ## Open questions
 
 - **Automated tagging sources:** exact mix of Vision, NaturalLanguage, path-derived rules, file metadata, and optional VLM captions.
-- **Duplicates:** detection pipeline and resolution actions (trash, APFS clone, etc.).
 - **Query syntax:** exact operators (`-tag`, `OR`, `type:`, `size:`, etc.).
