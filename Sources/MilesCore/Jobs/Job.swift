@@ -146,6 +146,17 @@ extension Library {
         }
     }
 
+    /// Queued and running jobs per kind, for progress display. Failed jobs are not counted: they are not waiting.
+    public func waitingJobCountsByKind() throws -> [JobKind: Int] {
+        try database.read { db in
+            var counts: [JobKind: Int] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT kind, COUNT(*) AS n FROM job WHERE state <> 'failed' GROUP BY kind") {
+                counts[JobKind(rawValue: row["kind"])] = row["n"]
+            }
+            return counts
+        }
+    }
+
     public func jobs(state: JobState? = nil, limit: Int = 100) throws -> [Job] {
         try database.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM job \(state == nil ? "" : "WHERE state = ?") ORDER BY id LIMIT ?",

@@ -4,7 +4,7 @@ Structure and target are in [ADR 0013](decisions/0013-project-structure-and-depl
 
 **How to use this file:** it lists only work that is not done. Work top to bottom. Tick a box only when the task is done and its tests pass, and remove it (with its notes) once it has landed and the README covers it. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0015). Steps 0 to 9 are implemented and removed from this file. What remains is below, mostly app UI.
+**Status:** design complete (ADRs 0001–0015). Steps 0 to 9 and section A are implemented and removed from this file. What remains is below, mostly app UI.
 
 ## Modules
 
@@ -17,16 +17,7 @@ Structure and target are in [ADR 0013](decisions/0013-project-structure-and-depl
 
 ## Remaining work
 
-Reviewed against the code on 2026-11-06. The library (`MilesCore`, `MilesAI`) and `miles-cli` cover every capability in the README. The main gap is the app: `MilesApp` is about 900 lines and only browses, searches, scans, reviews AI suggestions and asks plain-language questions. Everything else is reachable only from the CLI. Work in the order below; each group is independently shippable. Add or amend an ADR first for anything that changes a decision.
-
-### A. App: daily use (highest value)
-- [ ] Show a file's tags (detail pane or inspector), grouped by namespace, with source and confidence
-- [ ] Add and remove tags by hand on one or many selected files (`user` source), with tag autocomplete
-- [ ] Saved searches: save the current query, list and run them from the sidebar
-- [ ] Query errors shown inline with the parser's message; search history or tag browser (list tags with counts, click to search)
-- [ ] File actions: Open (already triggers download), Reveal in Finder, Quick Look
-- [ ] Multi-selection in the grid and keyboard navigation
-- [ ] Scan and job progress (hashing, tagging, AI) visible, with pause and resume
+Reviewed against the code on 2026-11-06. The library (`MilesCore`, `MilesAI`) and `miles-cli` cover every capability in the README. The main gap is the app: `MilesApp` is about 900 lines and covers daily use (browse, search, tag, saved searches, file actions, progress) but not the operations in B and C, which are reachable only from the CLI. Work in the order below; each group is independently shippable. Add or amend an ADR first for anything that changes a decision.
 
 ### B. App: operations that change files
 - [ ] Duplicates view: exact groups and `dup:near` suggestions, preview, choose Trash, clone or keep each time, optional tag merge

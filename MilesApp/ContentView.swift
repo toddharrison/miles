@@ -5,6 +5,10 @@ struct ContentView: View {
     @Bindable var model: AppModel
     @State private var showingReview = false
     @State private var showingAsk = false
+    @State private var showingInspector = true
+    @State private var showingTags = false
+    @State private var showingSaveSearch = false
+    @State private var savedName = ""
 
     var body: some View {
         NavigationSplitView {
@@ -40,17 +44,17 @@ struct ContentView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: $model.selectedRootID) {
+        List(selection: sidebarSelection) {
             Section("Library") {
                 libraryMenu
             }
             Section("Folders") {
                 Label("All files", systemImage: "photo.on.rectangle")
-                    .tag(Int64?.none)
+                    .tag(SidebarItem.all)
                 ForEach(model.roots) { root in
                     Label(root.location.resolve(fileSystem: model.fileSystem).map { ($0 as NSString).lastPathComponent } ?? "Drive not mounted",
                           systemImage: "folder")
-                        .tag(Int64?.some(root.id))
+                        .tag(SidebarItem.root(root.id))
                         .contextMenu {
                             Toggle("Fetch iCloud files once for thumbnails", isOn: Binding(
                                 get: { root.fetchOnce }, set: { model.setFetchOnce($0, root: root.id) }))
@@ -67,11 +71,36 @@ struct ContentView: View {
                         }
                 }
             }
+            if !model.savedSearches.isEmpty {
+                Section("Saved Searches") {
+                    ForEach(model.savedSearches, id: \.id) { saved in
+                        Label(saved.name, systemImage: "magnifyingglass")
+                            .tag(SidebarItem.saved(saved.id))
+                            .help(saved.query)
+                            .contextMenu { Button("Delete Saved Search", role: .destructive) { model.deleteSavedSearch(saved) } }
+                    }
+                }
+            }
         }
         .toolbar {
             ToolbarItem {
                 Button("Add Folder", systemImage: "plus") { model.addRoot() }
                     .disabled(model.library == nil)
+            }
+        }
+    }
+
+    private enum SidebarItem: Hashable { case all, root(Int64), saved(Int64) }
+
+    private var sidebarSelection: Binding<SidebarItem?> {
+        Binding {
+            if let saved = model.activeSaved { return .saved(saved.id) }
+            return model.selectedRootID.map { .root($0) } ?? .all
+        } set: { item in
+            switch item {
+            case .saved(let id): if let saved = model.savedSearches.first(where: { $0.id == id }) { model.run(saved) }
+            case .root(let id): model.selectRoot(id)
+            case .all, nil: model.selectRoot(nil)
             }
         }
     }
@@ -120,25 +149,58 @@ struct ContentView: View {
             }
         } else {
             VStack(spacing: 0) {
-                ThumbnailGrid(files: model.files, generation: model.thumbnailGeneration,
-                              thumbnailPath: { model.thumbnailPath(for: $0) }, onOpen: { model.open($0) })
-                Divider()
-                HStack {
-                    if model.status != nil {
-                        if let fraction = model.progress {
-                            ProgressView(value: fraction).frame(width: 140)
-                        } else {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    Text(model.status ?? summary).foregroundStyle(.secondary).font(.callout)
-                    Spacer()
+                if let error = model.queryError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red).font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.red.opacity(0.08))
+                        .textSelection(.enabled)
+                    Divider()
                 }
-                .padding(.horizontal, 12).padding(.vertical, 6)
+                ThumbnailGrid(files: model.files, generation: model.thumbnailGeneration,
+                              thumbnailPath: { model.thumbnailPath(for: $0) },
+                              selection: model.selectedFileIDs, onSelect: { model.selectedFileIDs = $0 },
+                              onOpen: { model.open($0) }, onOpenSelection: { model.openSelection() },
+                              onReveal: { model.revealSelection() }, onQuickLook: { model.quickLookSelection() })
+                Divider()
+                statusBar
             }
             .searchable(text: $model.query, prompt: "Search: cat or dog, \"text\", type:image, size:>5mb")
+            .searchSuggestions {
+                ForEach(model.searchHistory.filter { model.query.isEmpty || ($0.localizedCaseInsensitiveContains(model.query) && $0 != model.query) }, id: \.self) { past in
+                    Label(past, systemImage: "clock").searchCompletion(past)
+                }
+            }
             .onSubmit(of: .search) { model.refresh() }
+            .inspector(isPresented: $showingInspector) { InspectorView(model: model) }
+            .alert("Save Search", isPresented: $showingSaveSearch) {
+                TextField("Name", text: $savedName)
+                Button("Save") { model.saveCurrentSearch(named: savedName) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Saves \"\(model.query)\". It runs again with whatever matches then, including later tag changes.")
+            }
             .toolbar {
+                ToolbarItemGroup {
+                    Button("Open", systemImage: "arrow.up.forward.app") { model.openSelection() }
+                        .keyboardShortcut("o").disabled(model.selectedFileIDs.isEmpty)
+                    Button("Reveal in Finder", systemImage: "folder") { model.revealSelection() }
+                        .keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.selectedFileIDs.isEmpty)
+                    Button("Quick Look", systemImage: "eye") { model.quickLookSelection() }
+                        .keyboardShortcut("y").disabled(model.selectedFileIDs.isEmpty)
+                }
+                ToolbarItem {
+                    Button("Save Search", systemImage: "bookmark") { savedName = ""; showingSaveSearch = true }
+                        .disabled(model.query.trimmingCharacters(in: .whitespaces).isEmpty || model.queryError != nil)
+                }
+                ToolbarItem {
+                    Button("Browse Tags", systemImage: "tag") { showingTags = true }
+                        .popover(isPresented: $showingTags) { TagBrowserView(model: model, isPresented: $showingTags) }
+                }
+                ToolbarItem {
+                    Button("Inspector", systemImage: "sidebar.trailing") { showingInspector.toggle() }
+                }
                 ToolbarItem {
                     Button("Ask in Plain Language", systemImage: "sparkles") { showingAsk = true }
                 }
@@ -152,6 +214,43 @@ struct ContentView: View {
                         .disabled(model.status != nil)
                 }
             }
+        }
+    }
+
+    private var statusBar: some View {
+        HStack {
+            if model.status != nil {
+                if let fraction = model.progress {
+                    ProgressView(value: fraction).frame(width: 140)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            Text(model.status ?? summary).foregroundStyle(.secondary).font(.callout)
+            Spacer()
+            if model.selectedFileIDs.count > 1 {
+                Text("\(model.selectedFileIDs.count.formatted()) selected").foregroundStyle(.secondary).font(.callout)
+            }
+            queueStatus
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+
+    /// Background tagging, AI and duplicate hashing, with pause and resume. A scan runs to completion once started.
+    @ViewBuilder private var queueStatus: some View {
+        let total = model.waitingJobs.values.reduce(0, +)
+        if total > 0 || model.queuePaused {
+            let parts = JobGroup.allCases.compactMap { group in
+                model.waitingJobs[group].map { "\($0.formatted()) \(group.rawValue)" }
+            }
+            Text((model.queuePaused ? "Paused: " : "Working: ") + (parts.isEmpty ? "nothing waiting" : parts.joined(separator: ", ")))
+                .foregroundStyle(.secondary).font(.callout)
+            if !model.queuePaused && total > 0 { ProgressView().controlSize(.small) }
+            Button(model.queuePaused ? "Resume" : "Pause", systemImage: model.queuePaused ? "play.fill" : "pause.fill") {
+                if model.queuePaused { model.resumeQueue() } else { model.pauseQueue() }
+            }
+            .labelStyle(.iconOnly).buttonStyle(.borderless)
+            .help(model.queuePaused ? "Resume background work" : "Pause background work")
         }
     }
 

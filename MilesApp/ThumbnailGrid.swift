@@ -9,7 +9,13 @@ struct ThumbnailGrid: NSViewRepresentable {
     var files: [IndexedFile]
     var generation: Int
     var thumbnailPath: (Int64) -> String
+    /// File ids selected in the grid. The grid reports the user's changes and shows what the model holds.
+    var selection: Set<Int64>
+    var onSelect: (Set<Int64>) -> Void
     var onOpen: (IndexedFile) -> Void
+    var onOpenSelection: () -> Void
+    var onReveal: () -> Void
+    var onQuickLook: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -26,9 +32,22 @@ struct ThumbnailGrid: NSViewRepresentable {
         collection.allowsMultipleSelection = true
         collection.backgroundColors = [.clear]
         collection.dataSource = context.coordinator
+        collection.delegate = context.coordinator
         collection.register(GridItem.self, forItemWithIdentifier: GridItem.identifier)
-        collection.onOpen = { [weak coordinator = context.coordinator] index in coordinator?.open(index) }
-        context.coordinator.collection = collection
+        let coordinator = context.coordinator
+        collection.onOpen = { [weak coordinator] index in coordinator?.open(index) }
+        collection.onSelectionChanged = { [weak coordinator] in coordinator?.reportSelection() }
+        collection.onOpenSelection = { [weak coordinator] in coordinator?.onOpenSelection() }
+        collection.onQuickLook = { [weak coordinator] in coordinator?.onQuickLook() }
+        let menu = NSMenu()
+        for (title, action) in [("Open", #selector(Coordinator.menuOpen)), ("Reveal in Finder", #selector(Coordinator.menuReveal)),
+                                ("Quick Look", #selector(Coordinator.menuQuickLook))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = coordinator
+            menu.addItem(item)
+        }
+        collection.menu = menu
+        coordinator.collection = collection
 
         let scroll = NSScrollView()
         scroll.documentView = collection
@@ -41,16 +60,30 @@ struct ThumbnailGrid: NSViewRepresentable {
         let c = context.coordinator
         c.thumbnailPath = thumbnailPath
         c.onOpen = onOpen
+        c.onSelect = onSelect
+        c.onOpenSelection = onOpenSelection
+        c.onReveal = onReveal
+        c.onQuickLook = onQuickLook
         let changed = c.files != files
         let regenerated = c.generation != generation
         c.files = files
         if regenerated { c.generation = generation; c.images.removeAllObjects() }
         if changed || regenerated { c.collection?.reloadData() }
+        // reloadData drops the selection, so put the model's back whenever the items or the selection changed.
+        if changed || regenerated || c.selection != selection {
+            c.selection = selection
+            c.collection?.selectionIndexPaths = Set(files.indices.filter { selection.contains(files[$0].id) }.map { IndexPath(item: $0, section: 0) })
+        }
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSCollectionViewDataSource {
+    final class Coordinator: NSObject, NSCollectionViewDataSource, NSCollectionViewDelegate {
         var files: [IndexedFile] = []
+        var selection: Set<Int64> = []
+        var onSelect: (Set<Int64>) -> Void = { _ in }
+        var onOpenSelection: () -> Void = {}
+        var onReveal: () -> Void = {}
+        var onQuickLook: () -> Void = {}
         var generation = 0
         var thumbnailPath: (Int64) -> String = { _ in "" }
         var onOpen: (IndexedFile) -> Void = { _ in }
@@ -70,12 +103,57 @@ struct ThumbnailGrid: NSViewRepresentable {
             guard index < files.count else { return }
             onOpen(files[index])
         }
+
+        func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) { reportSelection() }
+        func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) { reportSelection() }
+
+        func reportSelection() {
+            guard let collection else { return }
+            let ids = Set(collection.selectionIndexPaths.compactMap { $0.item < files.count ? files[$0.item].id : nil })
+            selection = ids
+            onSelect(ids)
+        }
+
+        @objc func menuOpen() { onOpenSelection() }
+        @objc func menuReveal() { onReveal() }
+        @objc func menuQuickLook() { onQuickLook() }
     }
 }
 
-/// Reports a double-click on an item. NSCollectionView has no built-in action for it.
+/// Adds what NSCollectionView lacks: double-click to open, Return to open, Space for Quick Look, and a context
+/// menu that acts on the item under the pointer. Arrow keys and Command-A come from NSCollectionView itself.
 final class OpenableCollectionView: NSCollectionView {
     var onOpen: ((Int) -> Void)?
+    var onSelectionChanged: (() -> Void)?
+    var onOpenSelection: (() -> Void)?
+    var onQuickLook: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 49: onQuickLook?()
+        case 36, 76: onOpenSelection?()
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func selectAll(_ sender: Any?) {
+        super.selectAll(sender)
+        onSelectionChanged?()
+    }
+
+    override func deselectAll(_ sender: Any?) {
+        super.deselectAll(sender)
+        onSelectionChanged?()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let path = indexPathForItem(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        if !selectionIndexPaths.contains(path) {
+            selectionIndexPaths = [path]
+            onSelectionChanged?()
+        }
+        return super.menu(for: event)
+    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)

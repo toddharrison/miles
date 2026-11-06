@@ -48,7 +48,7 @@ Decisions are recorded as ADRs in [docs/decisions/](docs/decisions/). The concep
 
 ## Capabilities
 
-What works today (CLI `miles-cli` covers all of it; the SwiftUI app covers browsing, search, review and ask):
+What works today (CLI `miles-cli` covers all of it; the SwiftUI app covers browsing, search, tagging, saved searches, review and ask):
 
 - **Libraries.** Several independent libraries, each with its own SQLite database. A portable library can live on an external drive: it is reported (never recreated) while the drive is unplugged, reopens when it mounts, takes over a stale lock only on confirmation, and refuses a newer schema version. See [docs/PORTABLE.md](docs/PORTABLE.md).
 - **Indexing.** Roots are indexed in place. Moved and renamed files keep their identity, missing files are marked and removed after a grace period, file-change events plus periodic reconciliation keep the index current, and exclusions apply per root. iCloud placeholders are indexed by metadata only and never downloaded. Tested at a million files.
@@ -61,7 +61,7 @@ What works today (CLI `miles-cli` covers all of it; the SwiftUI app covers brows
 - **Background work.** A throttled, resumable job queue (hashing, tagging, AI) that pauses on battery or load.
 - **Backup and restore.** Verified, rotated snapshots of Miles' own data (daily, before migrations and bulk operations) and a JSON export of tags and rules; restore migrates older snapshots forward. User files are not backed up.
 
-The app is the thinnest layer: it browses, searches, scans, reviews AI suggestions and asks plain-language questions, but tagging by hand, saved searches, duplicates, the journal and undo, managed-root operations, backup and restore, and rules and aliases are CLI-only for now. Also not built: video and PDF thumbnails, document text and semantic search, MLX and Ollama providers. The full list is in [docs/PLAN.md](docs/PLAN.md).
+The app is the thinnest layer: it browses with multi-selection and keyboard navigation, searches (parser errors inline, search history, tag browser, saved searches in the sidebar), shows and edits tags by hand in an inspector, opens, reveals and previews files (Quick Look never downloads), shows background tagging, AI and hashing progress with pause and resume, scans, reviews AI suggestions and asks plain-language questions, but duplicates, the journal and undo, managed-root operations, backup and restore, and rules and aliases are CLI-only for now. Also not built: video and PDF thumbnails, document text and semantic search, MLX and Ollama providers. The full list is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Status
 

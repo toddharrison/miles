@@ -58,6 +58,14 @@ struct JobQueueTests {
         #expect(try e.library.jobCounts() == JobCounts(queued: 6, running: 0, failed: 0))
     }
 
+    @Test func waitingJobsAreCountedByKind() throws {
+        let e = try Env()
+        #expect(try e.library.waitingJobCountsByKind().isEmpty)
+        try e.library.enqueueJobs(kind: .tagMetadata, fileIDs: e.ids)
+        try e.library.enqueueJobs(kind: .fingerprint, fileIDs: Array(e.ids.prefix(2)))
+        #expect(try e.library.waitingJobCountsByKind() == [.tagMetadata: 3, .fingerprint: 2])
+    }
+
     @Test func runsEveryJobInOrderAndDeletesFinishedOnes() async throws {
         let e = try Env()
         try e.library.enqueueJobs(kind: .tagMetadata, fileIDs: e.ids)

@@ -44,7 +44,32 @@ final class AppModel {
     private var wantedLibraryID: UUID?
 
     var selectedRootID: Int64? { didSet { if oldValue != selectedRootID { refresh() } } }
-    var query = ""
+    var query = "" {
+        didSet { if let saved = activeSaved, saved.query != query { activeSaved = nil } }
+    }
+    /// The saved search whose query is in the search box, so the sidebar can highlight it. Editing the text clears it.
+    private(set) var activeSaved: SavedSearch?
+    private(set) var savedSearches: [SavedSearch] = []
+    /// The parser's message for the query in the search box, shown inline. The grid keeps the last good results.
+    private(set) var queryError: String?
+    private(set) var searchHistory: [String] = UserDefaults(suiteName: "app.miles.Miles")?.stringArray(forKey: "searchHistory") ?? []
+
+    // Selection, tags and the tag browser
+    var selectedFileIDs: Set<Int64> = [] {
+        didSet { if oldValue != selectedFileIDs { loadSelectionTags() } }
+    }
+    private(set) var selectionTags: [SelectionTag] = []
+    /// False when too many files are selected to list their tags one by one.
+    private(set) var selectionTagsListed = true
+    private(set) var tagBusy = false
+    /// Every tag with its file count: the tag browser and autocomplete.
+    private(set) var allTags: [TagInfo] = []
+
+    // Background work
+    private(set) var waitingJobs: [JobGroup: Int] = [:]
+    private(set) var queuePaused = false
+    private var statusPoll: Task<Void, Never>?
+    let quickLook = QuickLook()
 
     nonisolated private static let resultLimit = 50_000
 
@@ -108,6 +133,8 @@ final class AppModel {
             opened.removeObsoleteThumbnailSizes()
             reloadRoots()
             refresh()
+            reloadSavedSearches()
+            reloadTags()
             runScheduledBackup()
             startJobQueue(for: opened)
         } catch {
@@ -145,6 +172,8 @@ final class AppModel {
             selectedRootID = nil
             reloadRoots()
             refresh()
+            reloadSavedSearches()
+            reloadTags()
             startJobQueue(for: created)
         } catch {
             errorMessage = error.localizedDescription
@@ -162,6 +191,7 @@ final class AppModel {
             guard self.library === library else { return }
             let queue = JobQueue(library: library, handlers: handlers)
             jobQueue = queue
+            queuePaused = false
             Task.detached {
                 _ = try? library.recoverInterruptedOperations(fileSystem: fs)
                 // Originals past the retention the user set go to the Trash. Only Miles' own holdback copies are touched.
@@ -171,6 +201,13 @@ final class AppModel {
             }
         }
         reloadSuggestions()
+        statusPoll?.cancel()
+        statusPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.reloadWaitingJobs()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
         suggestionPoll?.cancel()
         suggestionPoll = Task { [weak self] in
             while !Task.isCancelled {
@@ -193,6 +230,9 @@ final class AppModel {
     func closeLibrary() {
         suggestionPoll?.cancel()
         suggestionPoll = nil
+        statusPoll?.cancel()
+        statusPoll = nil
+        quickLook.close()
         jobQueue?.stop()
         jobQueue = nil
         try? library?.close()
@@ -203,6 +243,14 @@ final class AppModel {
         suggestions = []
         suggestionCount = 0
         translation = nil
+        selectedFileIDs = []
+        selectionTags = []
+        allTags = []
+        savedSearches = []
+        activeSaved = nil
+        queryError = nil
+        waitingJobs = [:]
+        queuePaused = false
     }
 
     // MARK: Roots
@@ -421,7 +469,7 @@ final class AppModel {
 
     // MARK: Search
 
-    /// Runs the search box text. A malformed query shows its parse error; there is no loose-text fallback (ADR 0009).
+    /// Runs the search box text. A malformed query shows its parse error inline; there is no loose-text fallback (ADR 0009).
     func refresh() {
         guard let library else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -440,11 +488,167 @@ final class AppModel {
             case .success(let (found, total)):
                 files = found
                 totalFiles = total
-                errorMessage = nil
+                queryError = nil
+                let present = Set(found.map(\.id))
+                if !selectedFileIDs.isSubset(of: present) { selectedFileIDs.formIntersection(present) }
+                if !text.isEmpty { remember(text) }
             case .failure(let error):
-                errorMessage = error.localizedDescription
+                // A query the parser refused is the user's to fix, so it is shown by the search box, not as an alert.
+                if error is QueryError { queryError = error.localizedDescription }
+                else { errorMessage = error.localizedDescription }
             }
         }
+    }
+
+    private func remember(_ text: String) {
+        guard searchHistory.first != text else { return }
+        searchHistory = Array(([text] + searchHistory.filter { $0 != text }).prefix(15))
+        UserDefaults(suiteName: "app.miles.Miles")?.set(searchHistory, forKey: "searchHistory")
+    }
+
+    // MARK: Saved searches and the tag browser
+
+    func reloadSavedSearches() {
+        savedSearches = (try? library?.savedSearches()) ?? []
+    }
+
+    func saveCurrentSearch(named name: String) {
+        guard let library else { return }
+        do {
+            activeSaved = try library.saveSearch(name: name, query: query.trimmingCharacters(in: .whitespacesAndNewlines))
+            reloadSavedSearches()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteSavedSearch(_ saved: SavedSearch) {
+        do {
+            try library?.deleteSavedSearch(name: saved.name)
+            if activeSaved?.id == saved.id { activeSaved = nil }
+            reloadSavedSearches()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Runs a saved search from the sidebar. It searches all folders; the stored query may name a root itself.
+    func run(_ saved: SavedSearch) {
+        query = saved.query
+        activeSaved = saved
+        if selectedRootID != nil { selectedRootID = nil } else { refresh() }
+    }
+
+    /// Picks a folder in the sidebar. Leaving a saved search keeps its query in the box for the user to edit.
+    func selectRoot(_ id: Int64?) {
+        let wasSaved = activeSaved != nil
+        activeSaved = nil
+        if selectedRootID != id { selectedRootID = id } else if wasSaved { refresh() }
+    }
+
+    /// Searches for one tag, as the tag browser asks.
+    func search(tag: TagName) {
+        query = Self.searchText(for: tag)
+        if selectedRootID != nil { selectedRootID = nil } else { refresh() }
+    }
+
+    static func searchText(for tag: TagName) -> String {
+        func quoted(_ v: String) -> String {
+            v.contains(where: { $0.isWhitespace || $0 == "(" || $0 == ")" || $0 == "\"" || $0 == ":" })
+                ? "\"" + v.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" : v
+        }
+        return tag.display == tag.value ? quoted(tag.value) : "\(tag.namespace):\(quoted(tag.value))"
+    }
+
+    func reloadTags() {
+        guard let library else { return }
+        Task {
+            let tags = await Task.detached { (try? library.allTags()) ?? [] }.value
+            guard self.library === library else { return }
+            allTags = tags
+        }
+    }
+
+    // MARK: Tagging selected files
+
+    /// Tags on the selected files, with how many of them carry each one.
+    private func loadSelectionTags() {
+        guard let library else { return }
+        let selected = selectedFileIDs
+        guard !selected.isEmpty else { selectionTags = []; selectionTagsListed = true; return }
+        guard selected.count <= Self.tagListLimit else { selectionTags = []; selectionTagsListed = false; return }
+        selectionTagsListed = true
+        Task {
+            let result = await Task.detached { () -> [SelectionTag] in
+                var merged: [String: SelectionTag] = [:]
+                for id in selected {
+                    for info in (try? library.tags(forFile: id)) ?? [] {
+                        let key = info.name.description
+                        if var existing = merged[key] {
+                            existing.count += 1
+                            if existing.source != info.source { existing.source = "mixed" }
+                            merged[key] = existing
+                        } else {
+                            merged[key] = SelectionTag(name: info.name, count: 1, source: info.source, status: info.status, confidence: info.confidence)
+                        }
+                    }
+                }
+                return merged.values.sorted { $0.name.description < $1.name.description }
+            }.value
+            guard self.library === library, selectedFileIDs == selected else { return }
+            selectionTags = result
+        }
+    }
+
+    nonisolated private static let tagListLimit = 2_000
+
+    func addTag(_ text: String) {
+        changeTags { library, id in _ = try library.addTag(text, toFile: id) }
+    }
+
+    func removeTag(_ name: TagName) {
+        changeTags { library, id in _ = try library.removeTag(name.description, fromFile: id) }
+    }
+
+    private func changeTags(_ change: @escaping @Sendable (Library, Int64) throws -> Void) {
+        guard let library, !selectedFileIDs.isEmpty, !tagBusy else { return }
+        let ids = Array(selectedFileIDs)
+        tagBusy = true
+        Task {
+            let error = await Task.detached { () -> String? in
+                do { for id in ids { try change(library, id) }; return nil }
+                catch { return error.localizedDescription }
+            }.value
+            tagBusy = false
+            guard self.library === library else { return }
+            errorMessage = error
+            loadSelectionTags()
+            reloadTags()
+            refresh()
+        }
+    }
+
+    // MARK: Background work
+
+    private func reloadWaitingJobs() async {
+        guard let library else { return }
+        let counts = await Task.detached { (try? library.waitingJobCountsByKind()) ?? [:] }.value
+        guard self.library === library else { return }
+        var grouped: [JobGroup: Int] = [:]
+        for (kind, n) in counts { grouped[JobGroup(kind), default: 0] += n }
+        if grouped != waitingJobs { waitingJobs = grouped }
+    }
+
+    /// Stops the background queue between jobs. Queued work stays in the database; Resume picks it up.
+    func pauseQueue() {
+        jobQueue?.stop()
+        queuePaused = true
+    }
+
+    func resumeQueue() {
+        guard let queue = jobQueue else { return }
+        queuePaused = false
+        Task.detached { queue.start() }
     }
 
     // MARK: Files
@@ -472,6 +676,71 @@ final class AppModel {
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// The selected files, in grid order.
+    var selectedFiles: [IndexedFile] { files.filter { selectedFileIDs.contains($0.id) } }
+
+    func openSelection() {
+        for file in selectedFiles.prefix(10) { open(file) }
+    }
+
+    /// Shows the files in Finder. Revealing never downloads an iCloud file.
+    func revealSelection() {
+        guard let library else { return }
+        let chosen = selectedFiles
+        let fs = fileSystem
+        Task {
+            let urls = await Task.detached { chosen.compactMap { try? library.absolutePath(of: $0, fileSystem: fs) }.map { URL(fileURLWithPath: $0) } }.value
+            guard self.library === library else { return }
+            if urls.isEmpty { errorMessage = "Miles cannot find these files. Is their drive connected?" }
+            else { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+        }
+    }
+
+    /// Quick Look on the selection. Files that are not downloaded are skipped: previewing must not download (ADR 0011).
+    func quickLookSelection() {
+        guard let library else { return }
+        if quickLook.isShowing { quickLook.close(); return }
+        let chosen = selectedFiles.prefix(200)
+        let fs = fileSystem
+        Task {
+            let urls = await Task.detached { () -> [URL] in
+                chosen.filter { $0.icloudStatus != "dataless" }
+                    .compactMap { try? library.absolutePath(of: $0, fileSystem: fs) }
+                    .map { URL(fileURLWithPath: $0) }
+            }.value
+            guard self.library === library else { return }
+            if urls.isEmpty {
+                if !chosen.isEmpty { errorMessage = "These files are not downloaded. Open one to download it, then preview it." }
+            } else {
+                quickLook.show(urls)
+            }
+        }
+    }
+}
+
+/// A tag on the selected files and how many of them carry it.
+struct SelectionTag: Identifiable, Equatable, Sendable {
+    var name: TagName
+    var count: Int
+    var source: String
+    var status: String
+    var confidence: Double?
+    var id: String { name.description }
+}
+
+/// What a waiting background job is for, as the status bar says it.
+enum JobGroup: String, CaseIterable, Sendable {
+    case tagging = "tagging", ai = "AI", duplicates = "duplicate checks", other = "other"
+
+    init(_ kind: JobKind) {
+        switch kind {
+        case .tagMetadata, .tagPathRules: self = .tagging
+        case .tagSystemML, .tagLLM: self = .ai
+        case .fingerprint, .hashPartial, .hashFull: self = .duplicates
+        default: self = .other
         }
     }
 }
