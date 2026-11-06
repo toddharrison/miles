@@ -4,7 +4,7 @@ Order follows risk: nothing that changes files comes before the journal, undo an
 
 **How to use this file:** work top to bottom. Tick a box only when the task is done and its tests pass. When a task changes a decision, write or supersede an ADR first. Update the README, [DATA-MODEL.md](DATA-MODEL.md) and this file in the same commit as the code they describe.
 
-**Status:** design complete (ADRs 0001–0014). Steps 0 to 8 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates; managed roots and image standardization; AI layers, review queue, near-duplicates and plain-language search). Next: Step 9.
+**Status:** design complete (ADRs 0001–0014). Steps 0 to 9 done (skeleton and libraries; indexing of unmanaged roots; tags and search; thumbnails and grid; backup and restore; job queue and tagging layers 1–2; operations journal, undo and exact duplicates; managed roots and image standardization; AI layers, review queue, near-duplicates and plain-language search; portable library polish). Next: nothing scheduled; see Risks.
 
 ## Modules
 
@@ -152,10 +152,14 @@ Notes from Step 8:
 - Not in this step: OCR text is not stored or searched (only `content:text` is tagged), no embeddings or semantic search (deferred by ADR 0003), no UI for duplicate groups beyond `dup:near` search, no MLX or Ollama provider.
 
 ## Step 9: Portable library polish (ADR 0012)
-- [ ] Drive-absent handling and reconnect
-- [ ] Stale lock takeover flow
-- [ ] Schema version gating verified across app copies
-- [ ] App copy stored on the drive; document how to use it
+- [x] Drive-absent handling and reconnect (`LibraryAvailability`, `Library.rootStatuses`; the app reopens the library when its drive mounts, closes it cleanly before its drive unmounts, and rescans roots that return; unmounted roots keep their files)
+- [x] Stale lock takeover flow (same-Mac dead process reclaimed silently; other Mac or live process needs the user's confirmation in the app, `--take-over-lock` in the CLI; takeover never overrides the version gate)
+- [x] Schema version gating verified across app copies (tests: newer schema refused with nothing touched even with takeover, availability reports it without taking the lock; older databases migrate after a pre-migration backup)
+- [x] App copy stored on the drive; how to use it is in [PORTABLE.md](PORTABLE.md)
+
+Notes from Step 9:
+- The app copy itself is a manual copy of `Miles.app`; there is no installer or updater. Code signing and Gatekeeper behaviour of a copy opened from a drive on another Mac were not tested here.
+- Registering an existing portable library on a second Mac has no UI yet (the registry is per Mac); see PORTABLE.md.
 
 ## Risks to check early
 - **Scale:** synthetic million-file test for indexing and query speed.

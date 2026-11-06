@@ -21,6 +21,12 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .alert("Library is open elsewhere", isPresented: Binding(get: { model.pendingTakeOver != nil }, set: { if !$0 { model.pendingTakeOver = nil } })) {
+            Button("Take Over", role: .destructive) { model.confirmTakeOver() }
+            Button("Cancel", role: .cancel) { model.pendingTakeOver = nil }
+        } message: {
+            Text("Only take over if you are sure no other Mac or copy of Miles has this library open. Two openers at once can corrupt it. A crash on another Mac leaves this lock behind.")
+        }
         .alert("Download files to build thumbnails?", isPresented: Binding(get: { model.pendingFetch != nil }, set: { if !$0 { model.pendingFetch = nil } })) {
             Button("Download") { model.approvePendingFetch() }
             Button("Not Now", role: .cancel) { model.pendingFetch = nil }
@@ -86,7 +92,17 @@ struct ContentView: View {
     // MARK: Detail
 
     @ViewBuilder private var detail: some View {
-        if model.library == nil {
+        if model.library == nil, let unavailable = model.unavailable {
+            ContentUnavailableView {
+                Label("\(unavailable.libraryName) is unavailable", systemImage: unavailable.availability == .driveNotMounted ? "externaldrive.badge.xmark" : "exclamationmark.triangle")
+            } description: {
+                Text(unavailable.availability.message(libraryName: unavailable.libraryName))
+            } actions: {
+                if case .newerSchema = unavailable.availability {} else {
+                    Button("Try Again") { model.retryWanted() }
+                }
+            }
+        } else if model.library == nil {
             ContentUnavailableView {
                 Label("No library open", systemImage: "books.vertical")
             } description: {

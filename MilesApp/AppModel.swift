@@ -34,6 +34,12 @@ final class AppModel {
     /// A fetch-once batch that is large enough to need the user's approval (ADR 0011).
     var pendingFetch: FetchPlan?
     var errorMessage: String?
+    /// Why the wanted library is not open (drive not connected, locked, newer schema), shown in place of the grid (ADR 0012).
+    private(set) var unavailable: (libraryName: String, availability: LibraryAvailability)?
+    /// A lock Miles cannot show to be dead. Opening waits for the user's explicit confirmation.
+    var pendingTakeOver: LibraryRecord?
+    /// The library the user wants open; retried when a drive mounts.
+    private var wantedLibraryID: UUID?
 
     var selectedRootID: Int64? { didSet { if oldValue != selectedRootID { refresh() } } }
     var query = ""
@@ -45,15 +51,54 @@ final class AppModel {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.closeLibrary() }
         }
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.didMountNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.driveMounted() }
+        }
+        workspace.addObserver(forName: NSWorkspace.willUnmountNotification, object: nil, queue: .main) { [weak self] note in
+            let device = note.userInfo?["NSDevicePath"] as? String
+            MainActor.assumeIsolated { self?.driveWillUnmount(devicePath: device) }
+        }
         if let id = registry.defaultLibraryID { openLibrary(id) }
+    }
+
+    /// A drive appeared: reopen the wanted library if that is what was missing, and rescan roots that came back.
+    private func driveMounted() {
+        if library == nil, let id = wantedLibraryID, unavailable?.availability == .driveNotMounted {
+            openLibrary(id)
+        } else if library != nil {
+            reloadRoots()
+            if roots.contains(where: { $0.location.resolve(fileSystem: fileSystem) != nil }) { scan() }
+        }
+    }
+
+    /// The library's own drive is being ejected: close it first so the database and lock are left clean on the drive.
+    private func driveWillUnmount(devicePath: String?) {
+        guard let library, let url = devicePath,
+              library.directory == url || library.directory.hasPrefix(url + "/") else { return }
+        let name = libraryName ?? "Library"
+        closeLibrary()
+        unavailable = (name, .driveNotMounted)
     }
 
     // MARK: Libraries
 
-    func openLibrary(_ id: UUID) {
+    /// Opens a library, or says why it cannot be. `takeOver` is only passed after the user confirmed a lock.
+    func openLibrary(_ id: UUID, takeOver: Bool = false) {
         closeLibrary()
+        wantedLibraryID = id
+        unavailable = nil
+        if let record = registry.libraries.first(where: { $0.id == id }) {
+            let availability = registry.availability(of: record, fileSystem: fileSystem)
+            if !availability.canOpen && !(takeOver && availability.needsTakeOverConfirmation) {
+                unavailable = (record.name, availability)
+                libraryName = record.name
+                if availability.needsTakeOverConfirmation { pendingTakeOver = record }
+                return
+            }
+        }
         do {
-            let opened = try registry.open(id, fileSystem: fileSystem)
+            let opened = try registry.open(id, fileSystem: fileSystem, takeOverLock: takeOver)
             library = opened
             libraryName = registry.libraries.first { $0.id == id }?.name
             try? registry.setDefault(id)
@@ -130,6 +175,16 @@ final class AppModel {
                 self?.reloadSuggestions()
             }
         }
+    }
+
+    func retryWanted() {
+        if let id = wantedLibraryID { openLibrary(id) }
+    }
+
+    func confirmTakeOver() {
+        guard let record = pendingTakeOver else { return }
+        pendingTakeOver = nil
+        openLibrary(record.id, takeOver: true)
     }
 
     func closeLibrary() {

@@ -12,6 +12,7 @@ enum CLI {
       version
       library create <dir> [--name <name>]    create and register a library
       library list                            registered libraries
+      library status                          can each library open now (drive connected, lock, schema version)
       library forget <name>                   unregister a library (files and its folder are untouched)
       root add <path>                         index a folder in place (unmanaged)
       root remove <id>                        stop indexing; forgets its records, touches no files
@@ -158,6 +159,12 @@ enum CLI {
                 let mark = record.id == registry.defaultLibraryID ? "*" : " "
                 print("\(mark) \(record.name)\t\(path)")
             }
+        case "status":
+            for record in registry.libraries {
+                let availability = registry.availability(of: record, fileSystem: fs)
+                print("\(record.name)\t\(availability.message(libraryName: record.name))")
+                if availability.needsTakeOverConfirmation { print("\t(open it with --take-over-lock only if nothing else has it open)") }
+            }
         case "forget":
             args.removeFirst()
             guard let name = args.first else { throw Failure(message: "library forget needs a name") }
@@ -168,7 +175,7 @@ enum CLI {
             registry.unregister(record.id)
             print("forgot library '\(name)'; its folder was left as it is")
         default:
-            throw Failure(message: "usage: library create <dir> | library list | library forget <name>")
+            throw Failure(message: "usage: library create <dir> | library list | library status | library forget <name>")
         }
     }
 
@@ -261,8 +268,9 @@ enum CLI {
             try library.setFetchOnce(args[1] == "on", forRoot: id)
             print("root \(id): fetch once \(args[1])")
         case "list":
-            for root in try library.roots() {
-                let path = root.location.resolve(fileSystem: fs) ?? "(drive not mounted)"
+            for status in try library.rootStatuses(fileSystem: fs) {
+                let root = status.root
+                let path = status.path ?? "(drive not mounted or folder missing; files kept in the index)"
                 let excluded = (root.exclusions.isEmpty ? "" : "  excludes: \(root.exclusions.joined(separator: ", "))") + (root.fetchOnce ? "  fetch-once" : "") + printRoot(root)
                 print("\(root.id)\t\(root.mode)\t\(try library.fileCount(rootID: root.id)) files\t\(path)\(excluded)")
             }
